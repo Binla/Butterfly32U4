@@ -1,0 +1,145 @@
+// 250413 第3版 SFO 雙舵機代碼 - K.Kakuta 原創
+// 由 Antigravity AI 優化 - DSMX + 333Hz PWM 版本
+#include <Arduino.h>         // 引用 Arduino 核心庫
+#include <DSMRX.h>           // 引用 DSMX 接收機庫
+#include <SoftwareSerial.h>  // 引用 軟串口庫 用於調試
+
+// --- 硬體配置 ---
+const int PIN_SERVO_L = 9;   // 左舵機引腳 (必須為 9，用於 Timer 1 硬體 PWM)
+const int PIN_SERVO_R = 10;  // 右舵機引腳 (必須為 10，用於 Timer 1 硬體 PWM)
+const int PIN_DEBUG_RX = 7;  // 調試串口接收引腳
+const int PIN_DEBUG_TX = 8;  // 調試串口發送引腳
+
+const int PWM_MIN = 1000;    // 標準 PWM 最小值 (1ms)
+const int PWM_MAX = 2000;    // 標準 PWM 最大值 (2ms)
+const int PWM_CENTER = 1500; // 標準 PWM 中立點 (1.5ms)
+const int SERVO_LIMIT_MIN = 800;  // 舵機物理極限最小值
+const int SERVO_LIMIT_MAX = 2200; // 舵機物理極限最大值
+
+const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Ch6)
+const int THROTTLE_ARM_PWM = 1080; // 油門解鎖閾值 (低於此值不拍動)
+
+// --- 撲翼機參數限制 ---
+const int US_PER_DEGREE = 11; // 假設每度約 11微秒 (1000us = 90度)
+const int AMP_MIN_US = (30 * US_PER_DEGREE) / 2; // 30度總行程對應的半幅值
+const int AMP_MAX_US = (90 * US_PER_DEGREE) / 2; // 90度總行程對應的半幅值
+const unsigned long MIN_HALF_CYCLE_US = 50000;   // 10Hz 頻率上限 (半週期 50ms)
+
+// --- 全域變數 ---
+DSM2048 rx; // 建立 DSMX 接收機對象
+SoftwareSerial debug(PIN_DEBUG_RX, PIN_DEBUG_TX); // 建立軟串口對象
+
+// --- 狀態變數 ---
+unsigned long lastMicros = 0;  // 記錄上一次更新的時間（微秒）
+unsigned long elapsedUs = 0;   // 記錄當前週期內已流逝的時間
+
+int servo_zero1 = 0; // 舵機 1 零點修正
+int servo_zero2 = 0; // 舵機 2 零點修正
+int glide_deg = 0;   // 滑翔模式下的初始角度
+
+// --- PWM 硬體定時器控制 ---
+void setupPWM50Hz() {
+  pinMode(PIN_SERVO_L, OUTPUT); // 設置左舵機引腳為輸出
+  pinMode(PIN_SERVO_R, OUTPUT); // 設置右舵機引腳為輸出
+  // 定時器 1：快速 PWM 模式 14, ICR1 為計數上限, 8 分頻
+  TCCR1A = _BV(COM1A1) | _BV(COM1B1) | _BV(WGM11);
+  TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS11); 
+  ICR1 = 40000; // 2MHz / 50Hz = 40000 次計數 (20ms 週期)
+}
+
+void writePWM(int pin, int us) {
+  us = constrain(us, SERVO_LIMIT_MIN, SERVO_LIMIT_MAX); // 限制 PWM 在舵機安全範圍
+  int counts = us * 2; // 1微秒等於 2 個計數值 (因為是 2MHz 時鐘)
+  if (pin == PIN_SERVO_L) OCR1A = counts; // 寫入 A 通道比較暫存器
+  else if (pin == PIN_SERVO_R) OCR1B = counts; // 寫入 B 通道比較暫存器
+}
+
+void setup() {
+  Serial.begin(115200); // 啟動主串口用於 DSMX 信號接收
+  
+  debug.begin(38400);   // 啟動調試串口
+  debug.println("Butterfly Ornithopter - 50Hz DSMX Mode Started"); // 印出啟動訊息
+
+  setupPWM50Hz(); // 初始化 50Hz 硬體 PWM
+
+  delay(2000); // 等待接收機穩定與對頻
+  lastMicros = micros(); // 記錄初始時間
+}
+
+void loop() {
+  // 1. 檢查是否有新的 DSMX 數據包
+  if (rx.gotNewFrame()) {
+    uint16_t ch[8]; // 建立 8 通道緩存
+    rx.getChannelValues(ch, 8); // 讀取各通道數值
+
+    int throttle = ch[0];   // 通道 0：油門 (動力)
+    int aileron  = ch[1];   // 通道 1：副翼 (轉向)
+    int elevator = ch[2];   // 通道 2：升降 (俯仰)
+    int flapAmpCh = ch[3];  // 通道 3：拍動幅度
+    int flapFreqCh = ch[4]; // 通道 4：拍動頻率
+    int safetyCh = ch[5];   // 通道 5：安全開關
+
+    // 2. 更新計時邏輯
+    unsigned long currentMicros = micros(); // 獲取當前時間
+    unsigned long dt = currentMicros - lastMicros; // 計算兩幀之間的時間差
+    lastMicros = currentMicros; // 更新上一次時間
+    elapsedUs += dt; // 將時間累加到當前拍動週期
+
+    // 3. 處理遙控器輸入
+    int rudder = aileron - PWM_CENTER;   // 計算轉向偏移量
+    int elevShift = elevator - PWM_CENTER; // 計算俯仰偏移量
+    // 計算拍動幅度並限制在 30~90 度區間
+    int flapamp = constrain(abs(flapAmpCh - PWM_CENTER), AMP_MIN_US, AMP_MAX_US);
+    
+    // 計算拍動頻率 (根據 Ch4 映射)，限制最高頻率為 10Hz (50000us)
+    unsigned long halfCycleUs = (unsigned long)(flapFreqCh - 950) * 200;
+    if (halfCycleUs < MIN_HALF_CYCLE_US) halfCycleUs = MIN_HALF_CYCLE_US;
+
+    // 4. 模式選擇與安全控制
+    int outL = PWM_CENTER; // 初始化左輸出為中立點
+    int outR = PWM_CENTER; // 初始化右輸出為中立點
+
+    if (safetyCh > SAFETY_THRESHOLD) { // 如果安全開關已開啟
+      if (throttle > THROTTLE_ARM_PWM) { // 如果油門已解鎖 (拍動模式)
+        // --- 拍動模式邏輯 ---
+        int throttle_base = (throttle - PWM_MIN) / 2 + PWM_CENTER; // 計算油門基準位置
+        int throttle_inv = 3000 - throttle_base; // 計算鏡像位置
+
+        if (elapsedUs < halfCycleUs) { // 如果處於拍動週期的前半段
+          outL = throttle_base + rudder - elevShift + servo_zero1 + flapamp; // 計算左舵機輸出
+          outR = throttle_inv  + rudder + elevShift - servo_zero2 + flapamp; // 計算右舵機輸出
+        } 
+        else if (elapsedUs < (halfCycleUs * 2)) { // 如果處於拍動週期的後半段
+          outL = throttle_inv  + rudder - elevShift - servo_zero2 - flapamp; // 計算左舵機逆向輸出
+          outR = throttle_base + rudder + elevShift + servo_zero1 - flapamp; // 計算右舵機逆向輸出
+        }
+      } 
+      else {
+        // --- 滑翔模式 ---
+        outL = PWM_CENTER + rudder - elevShift + glide_deg; // 滑翔時的左舵機位置
+        outR = PWM_CENTER + rudder + elevShift - glide_deg; // 滑翔時的右舵機位置
+      }
+    } 
+    else {
+      // --- 安全模式 (關閉輸出) ---
+      outL = 1000; // 設置安全位置
+      outR = 2000; // 設置安全位置
+    }
+
+    // 5. 重置拍動週期
+    if (elapsedUs >= (halfCycleUs * 2)) { // 如果完成一個完整拍動週期
+      elapsedUs = 0; // 重置週期計時器
+    }
+
+    // 6. 輸出信號至硬體 PWM
+    writePWM(PIN_SERVO_L, outL); // 更新左舵機
+    writePWM(PIN_SERVO_R, outR); // 更新右舵機
+  }
+}
+
+// 串口中斷服務程序
+void serialEvent() {
+  while (Serial.available()) { // 當串口有數據時
+    rx.handleSerialEvent(Serial.read(), micros()); // 交由 DSMX 庫處理數據
+  }
+}

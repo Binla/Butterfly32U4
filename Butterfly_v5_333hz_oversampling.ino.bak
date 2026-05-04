@@ -1,0 +1,127 @@
+// 250413 Version6 - PTK 7432 @ 7.4V Power Optimization
+// Optimized by Antigravity AI - Physical Load Matching (6Hz / 45deg)
+#include <Arduino.h>         // 引用 Arduino 核心庫
+#include <DSMRX.h>           // 引用 DSMX 接收機庫
+#include <SoftwareSerial.h>  // 引用 軟串口庫 用於調試
+
+// --- 硬體配置 ---
+const int PIN_SERVO_L = 9;   // 左舵機引腳 (必須為 9，用於 Timer 1 硬體 PWM)
+const int PIN_SERVO_R = 10;  // 右舵機引腳 (必須為 10，用於 Timer 1 硬體 PWM)
+const int PIN_DEBUG_RX = 7;  // 調試串口接收引腳
+const int PIN_DEBUG_TX = 8;  // 調試串口發送引腳
+
+const int PWM_MIN = 1000;    // 標準 PWM 最小值
+const int PWM_MAX = 2000;    // 標準 PWM 最大值
+const int PWM_CENTER = 1500; // 標準 PWM 中立點
+const int SERVO_LIMIT_MIN = 800;  // 舵機物理極限最小值
+const int SERVO_LIMIT_MAX = 2200; // 舵機物理極限最大值
+
+const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Ch6)
+const int THROTTLE_ARM_PWM = 1080; // 油門解鎖閾值
+
+// --- 撲翼機動力限制 (PTK 7432 @ 7.4V 物理極限匹配) ---
+const float LIMIT_FREQ_MIN = 2.0;   // 最低拍動頻率 (Hz)
+const float LIMIT_FREQ_MAX = 6.0;   // 根據 0.105s/60° 運算，6Hz 為 7.4V 穩定輸出的黃金上限
+const float US_PER_DEGREE = 11.11;  // 基於 ±45° @ 1000-2000us 的精確係數
+const float AMP_MIN_US = (30 * US_PER_DEGREE) / 2.0; // 最低振幅 (30度總行程)
+const float AMP_MAX_US = (45 * US_PER_DEGREE) / 2.0; // 最高振幅 (45度總行程，確保高速不丟步)
+
+// --- 全域對象 ---
+DSM2048 rx; // DSMX 接收機
+SoftwareSerial debug(PIN_DEBUG_RX, PIN_DEBUG_TX); // 調試串口
+
+// --- 狀態變數 ---
+unsigned long lastMicros = 0;  // 上一次更新時間
+float cyclePhase = 0.0;        // 當前正弦波相位 (0 ~ 2PI)
+
+// --- 當前接收機快取 (用於超採樣計算) ---
+volatile int rxThrottle = 1000;
+volatile int rxAileron  = 1500;
+volatile int rxElevator = 1500;
+volatile int rxSafetyCh = 1000;
+
+// --- PWM 硬體定時器控制 (333Hz) ---
+void setupPWM333Hz() {
+  pinMode(PIN_SERVO_L, OUTPUT); 
+  pinMode(PIN_SERVO_R, OUTPUT); 
+  // Timer 1: Fast PWM Mode 14, Prescaler 8 (2MHz clock)
+  TCCR1A = _BV(COM1A1) | _BV(COM1B1) | _BV(WGM11);
+  TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS11); 
+  ICR1 = 6000; // 2MHz / 333.33Hz = 6000 counts (3ms period)
+}
+
+void writePWM(int pin, int us) {
+  us = constrain(us, SERVO_LIMIT_MIN, SERVO_LIMIT_MAX); 
+  int counts = us * 2; // 1us = 2 counts @ 2MHz clock
+  if (pin == PIN_SERVO_L) OCR1A = counts;
+  else if (pin == PIN_SERVO_R) OCR1B = counts;
+}
+
+void setup() {
+  Serial.begin(115200); // DSMX 信號串口
+  debug.begin(38400);   
+  debug.println("Butterfly Ornithopter - PTK 7432 @ 7.4V Opti-Mode Started");
+
+  setupPWM333Hz(); // 初始化 333Hz PWM 刷新率
+
+  delay(2000); 
+  lastMicros = micros(); 
+}
+
+void loop() {
+  // 1. 異步檢查接收機數據 (不阻塞拍動計算)
+  if (rx.gotNewFrame()) {
+    uint16_t ch[8]; 
+    rx.getChannelValues(ch, 8); 
+    rxThrottle  = ch[0]; 
+    rxAileron   = ch[1]; 
+    rxElevator  = ch[2]; 
+    rxSafetyCh  = ch[5]; 
+  }
+
+  // 2. 超採樣正弦波計算 (333Hz 高頻更新)
+  unsigned long currentMicros = micros();
+  float dt = (currentMicros - lastMicros) / 1000000.0;
+  lastMicros = currentMicros;
+
+  // 避免極小 dt 造成的浮點誤差
+  if (dt < 0 || dt > 0.1) dt = 0; 
+
+  // 3. 計算混合中心點 (Decoupled Trim Mode)
+  int rudder = (rxAileron - PWM_CENTER);      
+  int elevTrim = (rxElevator - PWM_CENTER);   
+  int centerL = PWM_CENTER + rudder + elevTrim; 
+  int centerR = PWM_CENTER - rudder + elevTrim; 
+
+  int outL = centerL;
+  int outR = centerR;
+
+  // 4. 正弦波動力計算
+  if (rxSafetyCh > SAFETY_THRESHOLD && rxThrottle > THROTTLE_ARM_PWM) {
+    float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
+    
+    // 動動態映射頻率與振幅
+    float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
+    float currentAmp = AMP_MIN_US + (tScale * (AMP_MAX_US - AMP_MIN_US));
+    
+    // 更新正弦相位
+    cyclePhase += currentFreq * dt * TWO_PI;
+    if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
+
+    float wave = sin(cyclePhase);
+    outL = centerL + (int)(wave * currentAmp);
+    outR = centerR + (int)(wave * currentAmp); 
+  } else {
+    cyclePhase = 0.0; // 重置相位
+  }
+
+  // 5. 輸出至舵機 (此刻是以最高頻率寫入硬體暫存器)
+  writePWM(PIN_SERVO_L, outL);
+  writePWM(PIN_SERVO_R, outR);
+}
+
+void serialEvent() {
+  while (Serial.available()) {
+    rx.handleSerialEvent(Serial.read(), micros());
+  }
+}

@@ -1,0 +1,180 @@
+#include <Servo.h>
+#include <SoftwareSerial.h>
+#include <DSMRX.h>
+
+#define DOPRINTS              
+#define LED_PIN 13            
+#define SERVO_LEFT_PIN 12     
+#define SERVO_RIGHT_PIN 11    
+#define SERVO_ELE_PIN 2    // 仍保留硬體腳位，但不控制
+#define CHANNELS 8            
+#define SAFE_SWITCH_THRESHOLD 1600  
+#define THROTTLE_ARM_THRESHOLD 1080 
+
+const int leftSafety = 2000;
+const int rightSafety = 1000;
+
+Servo servoLeft, servoRight, servoEle;
+
+volatile int throttleValue = 1000;    
+volatile int aileronValue = 1500;   
+volatile int elevatorValue = 1500;     
+volatile int flapDiffValue = 1500;    
+volatile int flapFreqValue = 1500;    
+volatile int safetySwitchValue = 1100;
+volatile int heatProtectSwitch = 1000;  
+int baseThrottle = 1500;  // 初始化中立值
+int elevatorInput;
+int rudderInput;
+int flapAmplitude;
+unsigned int flapCycleCount = 0;
+int upstrokeLeftTarget = 1500;
+int upstrokeRightTarget = 1500;
+int currentLeft = 1500;
+int currentRight = 1500;
+const float upstrokeSmoothRate = 0.1;  // 0.1 表示每次改變 10%
+bool isAttach = false;
+float elapsedTime = 0;          
+float servoDelayTime = 0.1;    // seconds
+
+unsigned long prevTime = 0;     
+
+DSM2048 rx;
+
+#ifdef DOPRINTS
+SoftwareSerial DebugSerial(8, 9);
+#endif
+
+void setup() {
+    pinMode(LED_PIN, OUTPUT);
+    Serial.begin(115200);
+#ifdef DOPRINTS
+    DebugSerial.begin(115200);
+#endif
+    servoLeft.attach(SERVO_LEFT_PIN);
+    servoRight.attach(SERVO_RIGHT_PIN);
+//    servoEle.attach(SERVO_ELE_PIN);
+    enterSafetyMode();
+    currentLeft = 1500;
+    currentRight = 1500;
+    delay(2000);
+    prevTime = micros();
+}
+
+void loop() {
+    handleReceiverData();
+    updateSystemTiming();
+    processFlightControl();
+}
+
+void handleReceiverData() {
+    if (rx.gotNewFrame()) {
+        uint16_t channelValues[CHANNELS];
+        rx.getChannelValues(channelValues, CHANNELS);
+
+        if (channelValues[0] > 1050) {
+            throttleValue = channelValues[0];
+            aileronValue = channelValues[1];
+            elevatorValue = channelValues[2];
+            flapDiffValue = channelValues[3];
+            flapFreqValue = channelValues[4];
+            safetySwitchValue = channelValues[5];
+            heatProtectSwitch = channelValues[6];
+
+            if (flapCycleCount < 300 || heatProtectSwitch > 1060) {
+                servoDelayTime = float(flapFreqValue - 950) / 5000.0;
+            } else {
+                servoDelayTime = float(flapFreqValue - 950) / 4000.0;
+            }
+            
+            rudderInput = aileronValue - 1500;
+            elevatorInput = elevatorValue - 1500;
+            flapAmplitude = flapDiffValue - 1500;
+            baseThrottle = (throttleValue - 1000) / 2 + 1500;
+            // elevator servo 不控管，可固定位置或關閉
+            // 例如固定在1500us中立位置:
+            //servoEle.writeMicroseconds(elevatorValue);
+        }
+    }
+}
+
+void updateSystemTiming() {
+    unsigned long currentTime = micros();
+    elapsedTime += (currentTime - prevTime) / 1000000.0;
+    prevTime = currentTime;
+}
+
+void processFlightControl() {
+    if (safetySwitchValue > SAFE_SWITCH_THRESHOLD) {
+        if (!isAttach) {
+        servoLeft.attach(SERVO_LEFT_PIN);
+        servoRight.attach(SERVO_RIGHT_PIN);
+        isAttach = true;
+        }
+        if (throttleValue > THROTTLE_ARM_THRESHOLD) {
+            controlFlappingMotion();
+        } else {
+            executeGlide(rudderInput, elevatorInput);
+        }
+    } else {
+        enterSafetyMode();
+    }
+}
+
+void controlFlappingMotion() {
+    if (elapsedTime < servoDelayTime) {
+        executeUpstroke(rudderInput, elevatorInput, flapAmplitude);
+    } else if (elapsedTime < 2 * servoDelayTime) {
+        executeDownstroke(rudderInput, elevatorInput, flapAmplitude);
+        flapCycleCount++;
+    } else {
+        elapsedTime = 0;
+    }
+}
+
+void executeUpstroke(int rudder, int elevator, int flapAmp) {
+    digitalWrite(LED_PIN, LOW);
+
+    // 計算目標值
+    upstrokeLeftTarget =  baseThrottle + rudder - elevator + flapAmp;
+    upstrokeRightTarget = 1000 + (2000 - baseThrottle) + rudder + elevator + flapAmp;
+
+    // 平滑地朝目標靠近
+    currentLeft = currentLeft + (upstrokeLeftTarget - currentLeft) * upstrokeSmoothRate;
+    currentRight = currentRight - (upstrokeRightTarget - currentRight) * upstrokeSmoothRate;
+
+    servoLeft.writeMicroseconds(currentLeft);
+    servoRight.writeMicroseconds(currentRight);
+}
+
+
+
+void executeDownstroke(int rudder, int elevator, int flapAmp) {
+    digitalWrite(LED_PIN, HIGH);
+    //servoLeft.writeMicroseconds(baseThrottle + rudder - elevator - flapAmp);
+    
+    servoLeft.writeMicroseconds(1000 + (2000 - baseThrottle) + rudder - elevator- flapAmp);
+    servoRight.writeMicroseconds(baseThrottle + rudder - elevator + flapAmp);
+   
+}
+ 
+
+void executeGlide(int rudder, int elevator) {
+    servoLeft.writeMicroseconds(1500 + rudder - elevator);
+    servoRight.writeMicroseconds(1500 - rudder - elevator );
+}
+
+void enterSafetyMode() {
+    servoLeft.writeMicroseconds(rightSafety);
+    servoRight.writeMicroseconds(rightSafety);
+    servoLeft.detach();
+    servoRight.detach(); 
+    isAttach = false;
+//    servoEle.writeMicroseconds(1500); // 安全中立位置 
+}
+
+void serialEvent() {
+    while (Serial.available()) {
+        rx.handleSerialEvent(Serial.read(), micros());
+    }
+}
