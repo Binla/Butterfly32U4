@@ -1,5 +1,5 @@
-// 250413 Version8 - 8.4V Extreme Performance Mode
-// Optimized by Antigravity AI - High Voltage (8Hz / 48deg)
+// 250507 Version10 - Frequency-Amplitude Trade-off Mode
+// Optimized by Antigravity AI - Load Management (High Freq -> Low Amp)
 #include <Arduino.h>         // 引用 Arduino 核心庫
 #include <DSMRX.h>           // 引用 DSMX 接收機庫
 #include <SoftwareSerial.h>  // 引用 軟串口庫 用於調試
@@ -13,8 +13,8 @@ const int PIN_DEBUG_TX = 8;  // 調試串口發送引腳
 const int PWM_MIN = 1000;    // 標準 PWM 最小值
 const int PWM_MAX = 2000;    // 標準 PWM 最大值
 const int PWM_CENTER = 1500; // 標準 PWM 中立點
-const int SERVO_LIMIT_MIN = 800;  // 舵機物理極限最小值
-const int SERVO_LIMIT_MAX = 2200; // 舵機物理極限最大值
+const int SERVO_LIMIT_MIN = 500;   // 舵機物理極限最小值 (擴展至 500us)
+const int SERVO_LIMIT_MAX = 2500;  // 舵機物理極限最大值 (擴展至 2500us)
 
 const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Ch6)
 const int THROTTLE_ARM_PWM = 1080; // 油門解鎖閾值
@@ -22,11 +22,11 @@ const int WING_STOP_L = 2100;    // 左舵機上揚位
 const int WING_STOP_R = 900;     // 右舵機上揚位 (鏡像)
 
 // --- 撲翼機動力限制 (PTK 7432 @ 8.4V 極限匹配) ---
-const float LIMIT_FREQ_MIN = 2.0;   // 最低拍動頻率 (Hz)
-const float LIMIT_FREQ_MAX = 8.0;   // 8.4V 下提升至 8Hz (0.078s/60°)
+const float LIMIT_FREQ_MIN = 1.56;  // 最低拍動頻率 (Hz)
+const float LIMIT_FREQ_MAX = 3.125; // 最高拍動頻率 (Hz)
 const float US_PER_DEGREE = 11.11;  // 1000us/90deg 換算
-const float AMP_MIN_US = (30 * US_PER_DEGREE) / 2.0; // 最低振幅 (30度總行程)
-const float AMP_MAX_US = (48 * US_PER_DEGREE) / 2.0; // 最高振幅升至 48度 (完美壓榨 8.4V 性能)
+const float AMP_MIN_US = 40.0 * US_PER_DEGREE; // 最低振幅 40度 (約 444us)
+const float AMP_MAX_US = 90.0 * US_PER_DEGREE; // 最高振幅 90度 (約 1000us)
 
 // --- 全域對象 ---
 DSM2048 rx; // DSMX 接收機
@@ -127,7 +127,8 @@ void loop() {
       if (rxThrottle > THROTTLE_ARM_PWM) {
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
         float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
-        float currentAmp = AMP_MIN_US + (tScale * (AMP_MAX_US - AMP_MIN_US));
+        // 權衡模式：高頻率時縮小幅度以減輕負載 (tScale=0 -> AMP_MAX, tScale=1 -> AMP_MIN)
+        float currentAmp = AMP_MAX_US - (tScale * (AMP_MAX_US - AMP_MIN_US));
         
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
