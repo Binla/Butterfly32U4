@@ -1,5 +1,5 @@
-// 250507 Version10 - Frequency-Amplitude Trade-off Mode
-// Optimized by Antigravity AI - Load Management (High Freq -> Low Amp)
+// 250507 Version14 - Sensitivity & Bias Optimization
+// Optimized by Antigravity AI - Bias ±10deg, Steering ±40deg, Pitch ±20deg
 #include <Arduino.h>         // 引用 Arduino 核心庫
 #include <DSMRX.h>           // 引用 DSMX 接收機庫
 #include <SoftwareSerial.h>  // 引用 軟串口庫 用於調試
@@ -26,6 +26,7 @@ const float LIMIT_FREQ_MIN = 1.56;  // 最低拍動頻率 (Hz)
 const float LIMIT_FREQ_MAX = 3.125; // 最高拍動頻率 (Hz)
 const float US_PER_DEGREE = 11.11;  // 1000us/90deg 換算
 const float AMP_MIN_US = 40.0 * US_PER_DEGREE; // 最低振幅 40度 (約 444us)
+const float AMP_MID_US = 75.0 * US_PER_DEGREE; // 中間點振幅 75度 (約 833us)
 const float AMP_MAX_US = 90.0 * US_PER_DEGREE; // 最高振幅 90度 (約 1000us)
 
 // --- 全域對象 ---
@@ -115,27 +116,42 @@ void loop() {
       // --- 正常飛行邏輯 (基準點可調版) ---
       int ailInput = (rxAileron - PWM_CENTER);      
       int eleInput = (rxElevator - PWM_CENTER);   
-      int ailOffset = (rxAilTrim - PWM_CENTER);  // Ch4 基準點偏移
-      int eleOffset = (rxEleTrim - PWM_CENTER);  // Ch5 基準點偏移
+      int ailOffset = (int)((rxAilTrim - PWM_CENTER) * 0.22);  // Ch4 靜態偏置限縮 (±10deg)
+      int eleOffset = (int)((rxEleTrim - PWM_CENTER) * 0.22);  // Ch5 靜態偏置限縮 (±10deg)
 
-      int totalAil = ailInput + ailOffset;
-      int totalEle = eleInput + eleOffset;
-
-      int centerL = PWM_CENTER + totalAil + totalEle; 
-      int centerR = PWM_CENTER + totalAil - totalEle; // 右側俯仰反向
+      // 1. 中立點計算：由 Pitch 控制 (限 ±20°) 與 Bias 修正
+      int dynamicEle = (int)(eleInput * 0.44); // 動態升降限縮 (±20deg / ±500單位)
+      int totalEle = dynamicEle + eleOffset;
+      int centerL = PWM_CENTER + totalEle + ailOffset; 
+      int centerR = PWM_CENTER - totalEle + ailOffset; // 右側俯仰反向，Roll Bias 同向 (鏡像安裝)
 
       if (rxThrottle > THROTTLE_ARM_PWM) {
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
         float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
-        // 權衡模式：高頻率時縮小幅度以減輕負載 (tScale=0 -> AMP_MAX, tScale=1 -> AMP_MIN)
-        float currentAmp = AMP_MAX_US - (tScale * (AMP_MAX_US - AMP_MIN_US));
+        
+        // 分段權衡模式：
+        // 0%-50% 油門: 振幅 90° -> 75°
+        // 50%-100% 油門: 振幅 75° -> 40°
+        float currentAmp;
+        if (tScale < 0.5) {
+          float tSub = tScale * 2.0; 
+          currentAmp = AMP_MAX_US - (tSub * (AMP_MAX_US - AMP_MID_US));
+        } else {
+          float tSub = (tScale - 0.5) * 2.0;
+          currentAmp = AMP_MID_US - (tSub * (AMP_MID_US - AMP_MIN_US));
+        }
         
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
 
+        // 2. 振幅計算：由 Throttle 基礎值與 Roll 差動值決定
+        float diffAmp = ailInput * 0.88; // 差動振幅加強 (±40deg / ±500單位)
+        float ampL = currentAmp - diffAmp;
+        float ampR = currentAmp + diffAmp;
+
         float wave = sin(cyclePhase);
-        outL = centerL + (int)(wave * currentAmp);
-        outR = centerR - (int)(wave * currentAmp); // 右側相位反向
+        outL = centerL + (int)(wave * ampL);
+        outR = centerR - (int)(wave * ampR); // 右側相位反向
       } else {
         cyclePhase = 0.0;
         outL = centerL;
