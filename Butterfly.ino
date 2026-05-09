@@ -16,7 +16,7 @@ const int PWM_CENTER = 1500; // 標準 PWM 中立點
 const int SERVO_LIMIT_MIN = 500;   // 舵機物理極限最小值 (擴展至 500us)
 const int SERVO_LIMIT_MAX = 2500;  // 舵機物理極限最大值 (擴展至 2500us)
 
-const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Ch6)
+const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Ch7)
 const int THROTTLE_ARM_PWM = 1080; // 油門解鎖閾值
 const int WING_STOP_L = 2100;    // 左舵機上揚位
 const int WING_STOP_R = 900;     // 右舵機上揚位 (鏡像)
@@ -44,7 +44,8 @@ volatile int rxAileron  = 1500;
 volatile int rxElevator = 1500;
 volatile int rxAilTrim  = 1500; // 新增：副翼基準點調整 (Ch4)
 volatile int rxEleTrim  = 1500; // 新增：升降舵基準點調整 (Ch5)
-volatile int rxSafetyCh = 1000;
+volatile int rxAmpCh    = 1500; // 新增：振幅控制 (Ch6)
+volatile int rxSafetyCh = 1000; // 安全開關 (Ch7)
 
 // --- PWM 硬體定時器控制 (333Hz) ---
 void setupPWM333Hz() {
@@ -83,7 +84,8 @@ void loop() {
     rxElevator  = ch[2]; 
     rxAilTrim   = ch[3]; // 讀取 Ch4 用於副翼 Trim
     rxEleTrim   = ch[4]; // 讀取 Ch5 用於升降舵 Trim
-    rxSafetyCh  = ch[5]; 
+    rxAmpCh     = ch[5]; // 讀取 Ch6 用於振幅控制
+    rxSafetyCh  = ch[6]; // 讀取 Ch7 用於安全開關
   }
 
   // 2. 超採樣時間步進
@@ -129,17 +131,9 @@ void loop() {
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
         float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
         
-        // 分段權衡模式：
-        // 0%-50% 油門: 振幅 90° -> 75°
-        // 50%-100% 油門: 振幅 75° -> 40°
-        float currentAmp;
-        if (tScale < 0.5) {
-          float tSub = tScale * 2.0; 
-          currentAmp = AMP_MAX_US - (tSub * (AMP_MAX_US - AMP_MID_US));
-        } else {
-          float tSub = (tScale - 0.5) * 2.0;
-          currentAmp = AMP_MID_US - (tSub * (AMP_MID_US - AMP_MIN_US));
-        }
+        // 1. 振幅計算：由 Ch6 旋鈕決定 (固定，不隨油門變化)
+        float ampScale = constrain((rxAmpCh - 1000) / 1000.0, 0.0, 1.0);
+        float currentAmp = AMP_MIN_US + (ampScale * (AMP_MAX_US - AMP_MIN_US));
         
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
