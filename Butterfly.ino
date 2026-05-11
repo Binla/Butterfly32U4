@@ -1,14 +1,25 @@
-// 250507 Version14 - Sensitivity & Bias Optimization
-// Optimized by Antigravity AI - Bias ±10deg, Steering ±40deg, Pitch ±20deg
+// 250511 Version15 - Setup Mode & Rudder Implementation
+// Optimized by Antigravity AI
+// 
+// --- 遙控器通道配置 (Channel Mapping) ---
+// Ch1 (ch[0]): 油門 (Throttle) - 控制拍動頻率 (Hz)
+// Ch2 (ch[1]): 副翼 (Aileron)  - 控制左右差動振幅 (Roll)，設定模式下調整左舵機微調
+// Ch3 (ch[2]): 升降 (Elevator) - 控制同向偏置 (Pitch)，設定模式下調整右舵機微調
+// Ch4 (ch[3]): 方向 (Rudder)   - 控制反向偏置 (Yaw/航向)，向左打到底儲存並退出設定
+// Ch5 (ch[4]): 未使用 (空置)
+// Ch6 (ch[5]): 振幅 (Amplitude)- 使用旋鈕控制基礎拍動角度 (40~90度)
+// Ch7 (ch[6]): 安全 (Safety)   - 安全開關 (Arm/Disarm)，上鎖狀態下可進入設定模式
 #include <Arduino.h>         // 引用 Arduino 核心庫
 #include <DSMRX.h>           // 引用 DSMX 接收機庫
 #include <SoftwareSerial.h>  // 引用 軟串口庫 用於調試
+#include <EEPROM.h>          // 引用 EEPROM 庫 用於保存微調
 
 // --- 硬體配置 ---
 const int PIN_SERVO_L = 9;   // 左舵機引腳 (必須為 9，用於 Timer 1 硬體 PWM)
 const int PIN_SERVO_R = 10;  // 右舵機引腳 (必須為 10，用於 Timer 1 硬體 PWM)
 const int PIN_DEBUG_RX = 7;  // 調試串口接收引腳
 const int PIN_DEBUG_TX = 8;  // 調試串口發送引腳
+const int PIN_LED = 13;      // LED 引腳 (PD13/D13)
 
 const int PWM_MIN = 1000;    // 標準 PWM 最小值
 const int PWM_MAX = 2000;    // 標準 PWM 最大值
@@ -37,14 +48,24 @@ SoftwareSerial debug(PIN_DEBUG_RX, PIN_DEBUG_TX); // 調試串口
 unsigned long lastMicros = 0;  
 float cyclePhase = 0.0;        
 bool isSystemArmed = false;    
+bool isInSetupMode = false;    // 新增：進入設定模式標記
+
+int savedOffsetL = 0;          // 新增：左舵機存儲偏置
+int savedOffsetR = 0;          // 新增：右舵機存儲偏置
+unsigned long lastSetupUpdate = 0; // 用於微調頻率限制
+
+// --- LED 控制相關 ---
+unsigned long ledTimer = 0;
+int ledSubState = 0;
+bool isAdjustingL = false;
+bool isAdjustingR = false;
 
 // --- 當前接收機快取 (用於超採樣計算) ---
 volatile int rxThrottle = 1000;
 volatile int rxAileron  = 1500;
 volatile int rxElevator = 1500;
-volatile int rxAilTrim  = 1500; // 新增：副翼基準點調整 (Ch4)
-volatile int rxEleTrim  = 1500; // 新增：升降舵基準點調整 (Ch5)
-volatile int rxAmpCh    = 1500; // 新增：振幅控制 (Ch6)
+volatile int rxRudder   = 1500; // 改名：Ch4 現在作為 Rudder 控制
+volatile int rxAmpCh    = 1500; // 讀取 Ch6 用於振幅控制
 volatile int rxSafetyCh = 1000; // 安全開關 (Ch7)
 
 // --- PWM 硬體定時器控制 (333Hz) ---
@@ -63,12 +84,76 @@ void writePWM(int pin, int us) {
   else if (pin == PIN_SERVO_R) OCR1B = counts;
 }
 
+// --- LED 邏輯函數 ---
+void updateLED() {
+  unsigned long now = millis();
+  float ampScale = constrain((rxAmpCh - 1000) / 1000.0, 0.0, 1.0);
+
+  if (isInSetupMode) {
+    // 設定模式樣式
+    int pulseCount = 2; // 預設 2 短亮
+    if (isAdjustingL) pulseCount = 3;
+    else if (isAdjustingR) pulseCount = 4;
+
+    unsigned long cycleTime = 1000; 
+    unsigned long localTime = now % cycleTime;
+    
+    if (localTime < 400) { // 1 長暗 (400ms)
+      digitalWrite(PIN_LED, LOW);
+    } else {
+      // 剩餘 600ms 用於短亮
+      unsigned long pulseTime = (localTime - 400) % 150;
+      int currentPulse = (localTime - 400) / 150;
+      if (currentPulse < pulseCount && pulseTime < 75) {
+        digitalWrite(PIN_LED, HIGH);
+      } else {
+        digitalWrite(PIN_LED, LOW);
+      }
+    }
+  } 
+  else if (!isSystemArmed) {
+    // 未解鎖：長亮
+    digitalWrite(PIN_LED, HIGH);
+  } 
+  else {
+    // 已解鎖
+    if (rxThrottle > THROTTLE_ARM_PWM) {
+      // 啟動後閃爍：頻率隨振幅變化 (3Hz ~ 15Hz)
+      float flashFreq = 3.0 + ampScale * 12.0; 
+      unsigned long flashPeriod = 1000.0 / flashFreq;
+      if ((now % flashPeriod) < (flashPeriod / 2)) {
+        digitalWrite(PIN_LED, HIGH);
+      } else {
+        digitalWrite(PIN_LED, LOW);
+      }
+    } else {
+      // 解鎖未啟動：1秒呼吸燈
+      // 由於 Pin 13 可能不支持硬體 PWM，這裡使用軟體模擬或簡單快速閃爍
+      // 為了兼容性，我們使用 1Hz 慢閃模擬呼吸感
+      if ((now % 1000) < 500) {
+        digitalWrite(PIN_LED, HIGH);
+      } else {
+        digitalWrite(PIN_LED, LOW);
+      }
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200); 
   debug.begin(38400);   
-  debug.println("Butterfly Ornithopter - v8 8.4V Extreme-Mode Started");
+  debug.println("Butterfly Ornithopter - v15 Setup Mode Ready");
+
+  // 從 EEPROM 讀取微調值 (地址 0 和 2)
+  EEPROM.get(0, savedOffsetL);
+  EEPROM.get(2, savedOffsetR);
+  // 合法性檢查，防止讀取到非法數據 (初次運行)
+  if (abs(savedOffsetL) > 400) savedOffsetL = 0;
+  if (abs(savedOffsetR) > 400) savedOffsetR = 0;
 
   setupPWM333Hz(); 
+  pinMode(PIN_LED, OUTPUT);
+  digitalWrite(PIN_LED, HIGH); // 開機長亮
 
   delay(2000); 
   lastMicros = micros(); 
@@ -82,8 +167,7 @@ void loop() {
     rxThrottle  = ch[0]; 
     rxAileron   = ch[1]; 
     rxElevator  = ch[2]; 
-    rxAilTrim   = ch[3]; // 讀取 Ch4 用於副翼 Trim
-    rxEleTrim   = ch[4]; // 讀取 Ch5 用於升降舵 Trim
+    rxRudder    = ch[3]; // Ch4 改為 Rudder 控制
     rxAmpCh     = ch[5]; // 讀取 Ch6 用於振幅控制
     rxSafetyCh  = ch[6]; // 讀取 Ch7 用於安全開關
   }
@@ -101,9 +185,58 @@ void loop() {
   // 4. 安全狀態機邏輯
   if (rxSafetyCh <= SAFETY_THRESHOLD) {
     isSystemArmed = false; 
-    outL = WING_STOP_L;
-    outR = WING_STOP_R;
+    
+    // --- 進入設定模式邏輯 ---
+    // 當 Safety OFF (上鎖) 且 Rudder & Throttle 在右下角
+    if (rxThrottle < 1100 && rxRudder > 1900) {
+      if (!isInSetupMode) {
+        isInSetupMode = true;
+        debug.println("Entering Setup Mode...");
+      }
+    }
+
+    if (isInSetupMode) {
+      isAdjustingL = false;
+      isAdjustingR = false;
+
+      // 1. Aileron 左右微調左邊舵機 (Ch1)
+      if (millis() - lastSetupUpdate > 50) { // 限制更新頻率
+        if (rxAileron > 1700) { savedOffsetL++; lastSetupUpdate = millis(); isAdjustingL = true; }
+        else if (rxAileron < 1300) { savedOffsetL--; lastSetupUpdate = millis(); isAdjustingL = true; }
+        
+        // 2. Elevator 上下微調右邊舵機 (Ch2)
+        if (rxElevator > 1700) { savedOffsetR++; lastSetupUpdate = millis(); isAdjustingR = true; }
+        else if (rxElevator < 1300) { savedOffsetR--; lastSetupUpdate = millis(); isAdjustingR = true; }
+        
+        savedOffsetL = constrain(savedOffsetL, -400, 400);
+        savedOffsetR = constrain(savedOffsetR, -400, 400);
+      }
+
+      // 3. 設定模式下輸出當前位置以便觀察
+      outL = PWM_CENTER + savedOffsetL;
+      outR = PWM_CENTER + savedOffsetR;
+
+      // 4. Rudder 往左打到底儲存並退出 (Ch4)
+      if (rxRudder < 1100) {
+        EEPROM.put(0, savedOffsetL);
+        EEPROM.put(2, savedOffsetR);
+        isInSetupMode = false;
+        debug.println("Settings Saved. Exiting Setup Mode.");
+
+        // LED 保存反饋：暗1秒 -> 亮2秒 -> 暗1秒
+        digitalWrite(PIN_LED, LOW);
+        delay(1000);
+        digitalWrite(PIN_LED, HIGH);
+        delay(2000);
+        digitalWrite(PIN_LED, LOW);
+        delay(1000);
+      }
+    } else {
+      outL = WING_STOP_L;
+      outR = WING_STOP_R;
+    }
   } else {
+    isInSetupMode = false; // 解鎖時自動退出設定模式
     if (!isSystemArmed) {
       if (rxThrottle < THROTTLE_ARM_PWM + 20) {
         isSystemArmed = true; 
@@ -115,37 +248,44 @@ void loop() {
     }
 
     if (isSystemArmed) {
-      // --- 正常飛行邏輯 (基準點可調版) ---
+      // --- 正常飛行邏輯 (含 Rudder 控制與 Saved Offsets) ---
       int ailInput = (rxAileron - PWM_CENTER);      
       int eleInput = (rxElevator - PWM_CENTER);   
-      int ailOffset = (int)((rxAilTrim - PWM_CENTER) * 0.22);  // Ch4 靜態偏置限縮 (±10deg)
-      int eleOffset = (int)((rxEleTrim - PWM_CENTER) * 0.22);  // Ch5 靜態偏置限縮 (±10deg)
+      int rudInput = (rxRudder - PWM_CENTER);   
+      
+      // 1. 中立點計算：
+      // Pitch (Elevator) 現在設為同向控制 (Common Bias)
+      // Yaw (Rudder) 設為反向控制 (Differential Bias)
+      int commonPitch = (int)(eleInput * 0.44); 
+      int diffYaw = (int)(rudInput * 0.44);
 
-      // 1. 中立點計算：由 Pitch 控制 (限 ±20°) 與 Bias 修正
-      int dynamicEle = (int)(eleInput * 0.44); // 動態升降限縮 (±20deg / ±500單位)
-      int totalEle = dynamicEle + eleOffset;
-      int centerL = PWM_CENTER + totalEle + ailOffset; 
-      int centerR = PWM_CENTER - totalEle + ailOffset; // 右側俯仰反向，Roll Bias 同向 (鏡像安裝)
+      int centerL = PWM_CENTER + savedOffsetL + commonPitch + diffYaw; 
+      int centerR = PWM_CENTER + savedOffsetR - commonPitch + diffYaw; 
+      // 注意：根據機械結構，Pitch 同向或反向可能需要調整。
+      // 這裡假設 L+, R- 是向上抬升。
 
       if (rxThrottle > THROTTLE_ARM_PWM) {
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
         float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
         
-        // 1. 振幅計算：由 Ch6 旋鈕決定 (固定，不隨油門變化)
         float ampScale = constrain((rxAmpCh - 1000) / 1000.0, 0.0, 1.0);
         float currentAmp = AMP_MIN_US + (ampScale * (AMP_MAX_US - AMP_MIN_US));
         
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
 
-        // 2. 振幅計算：由 Throttle 基礎值與 Roll 差動值決定
-        float diffAmp = ailInput * 0.88; // 差動振幅加強 (±40deg / ±500單位)
+        // 2. 差動振幅 (Roll) - 增加安全約束防止相位反轉
+        float diffAmp = ailInput * 0.88; 
         float ampL = currentAmp - diffAmp;
         float ampR = currentAmp + diffAmp;
 
+        // 強制振幅不得為負值，防止左右翅膀進入反相位（剪刀差）導致機體翻轉
+        if (ampL < 0.0) ampL = 0.0;
+        if (ampR < 0.0) ampR = 0.0;
+
         float wave = sin(cyclePhase);
         outL = centerL + (int)(wave * ampL);
-        outR = centerR - (int)(wave * ampR); // 右側相位反向
+        outR = centerR - (int)(wave * ampR); 
       } else {
         cyclePhase = 0.0;
         outL = centerL;
@@ -157,6 +297,9 @@ void loop() {
   // 5. 輸出至硬體 PWM
   writePWM(PIN_SERVO_L, outL);
   writePWM(PIN_SERVO_R, outR);
+
+  // 6. 更新 LED 狀態
+  updateLED();
 }
 
 void serialEvent() {
