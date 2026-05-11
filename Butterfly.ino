@@ -59,6 +59,8 @@ unsigned long ledTimer = 0;
 int ledSubState = 0;
 bool isAdjustingL = false;
 bool isAdjustingR = false;
+bool aileronPushed = false;   // 新增：防連發標記
+bool elevatorPushed = false;  // 新增：防連發標記
 
 // --- 當前接收機快取 (用於超採樣計算) ---
 volatile int rxThrottle = 1000;
@@ -199,18 +201,42 @@ void loop() {
       isAdjustingL = false;
       isAdjustingR = false;
 
-      // 1. Aileron 左右微調左邊舵機 (Ch1)
-      if (millis() - lastSetupUpdate > 50) { // 限制更新頻率
-        if (rxAileron > 1700) { savedOffsetL++; lastSetupUpdate = millis(); isAdjustingL = true; }
-        else if (rxAileron < 1300) { savedOffsetL--; lastSetupUpdate = millis(); isAdjustingL = true; }
-        
-        // 2. Elevator 上下微調右邊舵機 (Ch2)
-        if (rxElevator > 1700) { savedOffsetR++; lastSetupUpdate = millis(); isAdjustingR = true; }
-        else if (rxElevator < 1300) { savedOffsetR--; lastSetupUpdate = millis(); isAdjustingR = true; }
-        
-        savedOffsetL = constrain(savedOffsetL, -400, 400);
-        savedOffsetR = constrain(savedOffsetR, -400, 400);
+      // 1. Aileron 左右調整左邊舵機 (Ch1) - 打到最大/最小調整 1度 (11us)
+      if (rxAileron > 1900) {
+        if (!aileronPushed) {
+          savedOffsetL += 11; 
+          aileronPushed = true;
+          isAdjustingL = true;
+        }
+      } else if (rxAileron < 1100) {
+        if (!aileronPushed) {
+          savedOffsetL -= 11;
+          aileronPushed = true;
+          isAdjustingL = true;
+        }
+      } else if (rxAileron > 1400 && rxAileron < 1600) {
+        aileronPushed = false; // 回中後重置，允許下一次調整
       }
+      
+      // 2. Elevator 上下調整右邊舵機 (Ch2) - 打到最大/最小調整 1度 (11us)
+      if (rxElevator > 1900) {
+        if (!elevatorPushed) {
+          savedOffsetR += 11;
+          elevatorPushed = true;
+          isAdjustingR = true;
+        }
+      } else if (rxElevator < 1100) {
+        if (!elevatorPushed) {
+          savedOffsetR -= 11;
+          elevatorPushed = true;
+          isAdjustingR = true;
+        }
+      } else if (rxElevator > 1400 && rxElevator < 1600) {
+        elevatorPushed = false; // 回中後重置
+      }
+      
+      savedOffsetL = constrain(savedOffsetL, -500, 500);
+      savedOffsetR = constrain(savedOffsetR, -500, 500);
 
       // 3. 設定模式下輸出當前位置以便觀察
       outL = PWM_CENTER + savedOffsetL;
