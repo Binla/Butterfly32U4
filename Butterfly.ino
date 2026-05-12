@@ -84,7 +84,6 @@ volatile int rxSafetyCh = 1000;
 void setupPWM333Hz() {
   pinMode(PIN_SERVO_L, OUTPUT); 
   pinMode(PIN_SERVO_R, OUTPUT); 
-  // 使用 Timer 1 配置高速 PWM (Configure Timer 1 for High Speed PWM)
   TCCR1A = _BV(COM1A1) | _BV(COM1B1) | _BV(WGM11);
   TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS11); 
   ICR1 = 6000; // 設定 3ms 週期 = 333.33Hz (Set 3ms period for 333Hz)
@@ -104,25 +103,24 @@ void updateLED() {
   float ampScale = constrain((rxAmpCh - 1000) / 1000.0, 0.0, 1.0);
 
   if (isInSetupMode) {
-    // 設定模式下的特定燈號模式 (LED Patterns for Setup Mode)
     unsigned long cycleTime = 2500; 
     unsigned long t = now % cycleTime;
     bool ledOn = false;
 
-    if (setupStep == 0) { // 模式 1.1: 1長3短 (Left Trim)
+    if (setupStep == 0) { // 1.1 (1長3短)
       if (t < 600) ledOn = true;
       else if (t >= 800 && t < 950) ledOn = true;
       else if (t >= 1100 && t < 1250) ledOn = true;
       else if (t >= 1400 && t < 1550) ledOn = true;
     } 
-    else if (setupStep == 1) { // 模式 1.2: 1長4短 (Right Trim)
+    else if (setupStep == 1) { // 1.2 (1長4短)
       if (t < 600) ledOn = true;
       else if (t >= 800 && t < 950) ledOn = true;
       else if (t >= 1100 && t < 1250) ledOn = true;
       else if (t >= 1400 && t < 1550) ledOn = true;
       else if (t >= 1700 && t < 1850) ledOn = true;
     }
-    else if (setupStep == 2) { // 模式 2.1: 2長2短 (Reverse)
+    else if (setupStep == 2) { // 2.1 (2長2短)
       if (t < 600) ledOn = true;
       else if (t >= 800 && t < 1400) ledOn = true;
       else if (t >= 1600 && t < 1750) ledOn = true;
@@ -131,51 +129,42 @@ void updateLED() {
     digitalWrite(PIN_LED, ledOn ? HIGH : LOW);
   } 
   else if (!isSystemArmed) {
-    // 未解鎖狀態：LED 常亮 (Disarmed: Solid LED)
     digitalWrite(PIN_LED, HIGH);
   } 
   else {
-    // 已解鎖狀態 (Armed States)
     if (rxThrottle > THROTTLE_ARM_PWM) {
-      // 飛行中：頻率隨振幅變化的快閃 (Flying: Fast flash based on amplitude)
       float flashFreq = 3.0 + ampScale * 12.0; 
       unsigned long flashPeriod = 1000.0 / flashFreq;
       if ((now % flashPeriod) < (flashPeriod / 2)) digitalWrite(PIN_LED, HIGH);
       else digitalWrite(PIN_LED, LOW);
     } else {
-      // 解鎖怠速：1Hz 慢閃 (Armed Idle: 1Hz Slow Blink)
       if ((now % 1000) < 500) digitalWrite(PIN_LED, HIGH);
       else digitalWrite(PIN_LED, LOW);
     }
   }
 }
 
-// --- 系統初始化 (System Setup) ---
 void setup() {
-  Serial.begin(115200); // 接收機串口 (Receiver Serial)
-  debug.begin(38400);   // 調試串口 (Debug Serial)
+  Serial.begin(115200); 
+  debug.begin(38400);   
   debug.println("Butterfly Ornithopter Setup Mode Ready");
 
-  // 從 EEPROM 讀取儲存的設定 (Read saved settings from EEPROM)
   EEPROM.get(0, savedOffsetL);
   EEPROM.get(2, savedOffsetR);
   isGlobalReverse = (EEPROM.read(4) == 1);
 
-  // 數據合法性檢查 (Sanity check for EEPROM data)
   if (abs(savedOffsetL) > 450) savedOffsetL = 0;
   if (abs(savedOffsetR) > 450) savedOffsetR = 0;
 
-  setupPWM333Hz(); // 初始化 PWM (Init PWM)
+  setupPWM333Hz(); 
   pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, HIGH); // 開機指示 (Power-on indicator)
+  digitalWrite(PIN_LED, HIGH); 
 
   delay(2000); 
   lastMicros = micros(); 
 }
 
-// --- 主循環 (Main Loop) ---
 void loop() {
-  // 1. 處理接收機數據 (Process Receiver Data)
   if (rx.gotNewFrame()) {
     uint16_t ch[8]; 
     rx.getChannelValues(ch, 8); 
@@ -187,7 +176,6 @@ void loop() {
     rxSafetyCh  = ch[6]; 
   }
 
-  // 2. 計算時間步長 (Calculate Delta Time)
   unsigned long currentMicros = micros();
   float dt = (currentMicros - lastMicros) / 1000000.0;
   lastMicros = currentMicros;
@@ -196,25 +184,19 @@ void loop() {
   int outL = WING_STOP_L; 
   int outR = WING_STOP_R; 
 
-  // 3. 安全與設定邏輯 (Safety and Setup Logic)
   if (rxSafetyCh <= SAFETY_THRESHOLD) {
-    // --- 系統處於上鎖狀態 (System is LOCKED) ---
     isSystemArmed = false; 
     
-    // 進入設定模式邏輯 (Enter Setup Mode Logic)
     if (rxThrottle < 1100 && rxRudder > 1900) {
       if (!isInSetupMode) {
         isInSetupMode = true;
         setupStep = 0;
-        rudderRightPushed = true; // 要求回中 (Require centering stick)
+        rudderRightPushed = true; 
         debug.println("Entering Setup Mode (1.1)");
       }
     }
 
     if (isInSetupMode) {
-      // --- 設定模式操作 (Setup Mode Operations) ---
-      
-      // A. 模式切換 (Switch Mode - Rudder Right)
       if (rxRudder > 1900) {
         if (!rudderRightPushed) {
           setupStep = (setupStep + 1) % 3;
@@ -225,7 +207,6 @@ void loop() {
         rudderRightPushed = false;
       }
 
-      // B. 儲存與退出 (Save and Exit - Rudder Left Hold 3s)
       if (rxRudder < 1100) {
         if (rudderLeftTimer == 0) rudderLeftTimer = millis();
         if (millis() - rudderLeftTimer > 3000) {
@@ -235,7 +216,6 @@ void loop() {
           isInSetupMode = false;
           rudderLeftTimer = 0;
           debug.println("Settings Saved.");
-          // 保存成功反饋 (Save success feedback)
           digitalWrite(PIN_LED, LOW); delay(1000);
           digitalWrite(PIN_LED, HIGH); delay(2000);
           digitalWrite(PIN_LED, LOW); delay(1000);
@@ -244,25 +224,23 @@ void loop() {
         rudderLeftTimer = 0;
       }
 
-      // C. 參數調整 (Adjustment Logic - Only when Rudder is centered)
       if (rxRudder > 1400 && rxRudder < 1600) {
-        if (setupStep == 0) { // 1.1 左舵機微調 (Left Servo Trim)
+        if (setupStep == 0) { 
           if (rxAileron > 1900) { if (!aileronPushed) { savedOffsetL += 11; aileronPushed = true; } }
           else if (rxAileron < 1100) { if (!aileronPushed) { savedOffsetL -= 11; aileronPushed = true; } }
           else aileronPushed = false;
         } 
-        else if (setupStep == 1) { // 1.2 右舵機微調 (Right Servo Trim)
+        else if (setupStep == 1) { 
           if (rxElevator > 1900) { if (!elevatorPushed) { savedOffsetR += 11; elevatorPushed = true; } }
           else if (rxElevator < 1100) { if (!elevatorPushed) { savedOffsetR -= 11; elevatorPushed = true; } }
           else elevatorPushed = false;
         }
-        else if (setupStep == 2) { // 2.1 正反向切換 (Direction Reverse)
+        else if (setupStep == 2) { 
           if (rxAileron > 1900 || rxAileron < 1100) {
             if (!aileronPushed) {
               isGlobalReverse = !isGlobalReverse;
               aileronPushed = true;
               debug.print("Reverse: "); debug.println(isGlobalReverse);
-              // 切換反饋：舵機跳動 (Toggle feedback: servo jump)
               writePWM(PIN_SERVO_L, PWM_CENTER + savedOffsetL + 200);
               writePWM(PIN_SERVO_R, PWM_CENTER + savedOffsetR + 200);
               delay(150);
@@ -270,83 +248,57 @@ void loop() {
           } else aileronPushed = false;
         }
       }
-      // 應用限制與輸出 (Apply constraints and output)
       savedOffsetL = constrain(savedOffsetL, -500, 500);
       savedOffsetR = constrain(savedOffsetR, -500, 500);
       outL = PWM_CENTER + savedOffsetL;
       outR = PWM_CENTER + savedOffsetR;
     } else {
-      // 僅上鎖未進入設定：翅膀上揚 (Locked: Wings UP)
       outL = WING_STOP_L;
       outR = WING_STOP_R;
     }
   } else {
-    // --- 系統處於解鎖狀態 (System is UNLOCKED / ARMED) ---
     isInSetupMode = false; 
     if (!isSystemArmed) {
-      // 安全解鎖程序：油門需歸零 (Arming procedure: throttle must be zero)
       if (rxThrottle < THROTTLE_ARM_PWM + 20) isSystemArmed = true; 
       else { outL = WING_STOP_L; outR = WING_STOP_R; }
     }
-    
     if (isSystemArmed) {
-      // --- 正常飛行控制邏輯 (Normal Flight Control Logic) ---
       int ailInput = (rxAileron - PWM_CENTER);      
       int eleInput = (rxElevator - PWM_CENTER);   
       int rudInput = (rxRudder - PWM_CENTER);   
-      
-      int mult = isGlobalReverse ? -1 : 1; // 應用正反向係數 (Apply reverse factor)
-      
-      // 1. 中立點與偏置計算 (Trim and Bias Calculation)
+      int mult = isGlobalReverse ? -1 : 1;
       int commonPitch = (int)(eleInput * 0.44); 
       int diffYaw = (int)(rudInput * 0.44);
       int centerL = PWM_CENTER + savedOffsetL + (commonPitch + diffYaw) * mult; 
       int centerR = PWM_CENTER + savedOffsetR - (commonPitch - diffYaw) * mult; 
 
       if (rxThrottle > THROTTLE_ARM_PWM) {
-        // --- 啟動拍動 (Flapping Active) ---
-        
-        // A. 計算頻率 (Frequency)
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
         float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
-        
-        // B. 計算振幅 (Amplitude)
         float ampScale = constrain((rxAmpCh - 1000) / 1000.0, 0.0, 1.0);
         float currentAmp = AMP_MIN_US + (ampScale * (AMP_MAX_US - AMP_MIN_US));
-        
-        // C. 更新相位 (Update Phase)
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
-        
-        // D. 計算差動振幅 (Roll/Differential Amplitude)
         float diffAmp = ailInput * 0.88; 
         float ampL = currentAmp - diffAmp;
         float ampR = currentAmp + diffAmp;
-        if (ampL < 0.0) ampL = 0.0; // 安全約束 (Safety constraints)
+        if (ampL < 0.0) ampL = 0.0;
         if (ampR < 0.0) ampR = 0.0;
-        
-        // E. 最終波形輸出 (Final Waveform Output)
         float wave = sin(cyclePhase);
         outL = centerL + (int)(wave * ampL * mult);
         outR = centerR - (int)(wave * ampR * mult); 
       } else {
-        // 解鎖但未推油門：保持在中立位 (Armed but throttle zero: hold center)
         cyclePhase = 0.0;
         outL = centerL;
         outR = centerR;
       }
     }
   }
-
-  // 4. 輸出 PWM 訊號 (Output PWM signals)
   writePWM(PIN_SERVO_L, outL);
   writePWM(PIN_SERVO_R, outR);
-
-  // 5. 更新 LED 狀態 (Update LED Status)
   updateLED();
 }
 
-// --- 接收機串口中斷處理 (Handle Receiver Serial Events) ---
 void serialEvent() {
   while (Serial.available()) rx.handleSerialEvent(Serial.read(), micros());
 }
