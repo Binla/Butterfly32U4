@@ -3,8 +3,8 @@
 
 // --- 遙控器通道配置 (Channel Mapping / プロポのチャンネル設定) ---
 // Ch1: 油門 (Throttle / スロットル) - Flapping Frequency (Hz) / 拍動周波数
-// Ch2: 副翼 (Aileron / エルロン) - Roll / Left Trim / ロール、設定モードで左微調整
-// Ch3: 升降 (Elevator / エレベーター) - Pitch / Right Trim / ピッチ、設定モードで右微調整
+// Ch2: 副翼 (Aileron / エルロン) - Roll / Trim (Differential: one side high, one side low) / 左右差動微調
+// Ch3: 升降 (Elevator / エレベーター) - Pitch / Trim (Common: both sides together) / 兩邊同步高低微調
 // Ch4: 方向 (Rudder / ラダー) - Yaw / Setup Menu / ヨー、設定モード切替・保存
 // Ch5: 未使用 (Unused / 未使用)
 // Ch6: 振幅 (Amplitude / 振幅) - Flapping Angle (40~90°) / 拍動角度
@@ -15,8 +15,7 @@
 // 2. 慢閃 (Slow Blink / ゆっくり点滅): 已解鎖，油門關閉 (Armed, Idle / 解除・待機中)
 // 3. 快閃 (Fast Blink / 速い点滅): 飛行中 (Flying / 飛行中)
 // 4. 設定模式 (Setup Mode / 設定モード): (Rudder Right to cycle, Left hold 3s to save)
-//    - 1.1 (1L 3S): 左舵微調 (Left Trim / 左微調整)
-//    - 1.2 (1L 4S): 右舵微調 (Right Trim / 右微調整)
+//    - 1.1 (1L 3S): 雙舵微調 (Servo Trim - 升降同向, 副翼反向)
 //    - 2.1 (2L 2S): 正反向 (Servo Reverse / サーボ正逆)
 // 5. 保存成功 (Saved / 保存成功): Blink pattern / 点滅確認
 
@@ -28,9 +27,9 @@
 // --- 硬體配置 (Hardware Configuration) ---
 const int PIN_SERVO_L = 9;   // 左舵機引腳 (Left Servo Pin - Timer 1 Hardware PWM)
 const int PIN_SERVO_R = 10;  // 右舵機引腳 (Right Servo Pin - Timer 1 Hardware PWM)
-const int PIN_DEBUG_RX = 7;  // 調試串口接收引腳 (Debug Serial RX)
-const int PIN_DEBUG_TX = 8;  // 調試串口發送引腳 (Debug Serial TX)
-const int PIN_LED = 13;      // LED 引腳 (Status LED Pin)
+const int PIN_DEBUG_RX = 8;  // 調試串口接收引腳 (Debug Serial RX - Swapped to Pin 8 for ATmega32U4 SoftwareSerial compatibility)
+const int PIN_DEBUG_TX = 7;  // 調試串口發送引腳 (Debug Serial TX - Swapped to Pin 7)
+const int PIN_LED = 5;       // LED 引腳 (Status LED Pin - Pro Micro lacks Pin 13, changed to D5)
 
 const int PWM_MIN = 1000;    // 標準 PWM 最小值 (Standard PWM Minimum)
 const int PWM_MAX = 2000;    // 標準 PWM 最大值 (Standard PWM Maximum)
@@ -50,6 +49,7 @@ const float US_PER_DEGREE = 11.11;  // 每度對應的微秒換算 (1000us/90deg
 const float AMP_MIN_US = 40.0 * US_PER_DEGREE; // 最低振幅 40度 (Min Amplitude 40deg)
 const float AMP_MID_US = 75.0 * US_PER_DEGREE; // 中間振幅 75度 (Mid Amplitude 75deg)
 const float AMP_MAX_US = 90.0 * US_PER_DEGREE; // 最高振幅 90度 (Max Amplitude 90deg)
+const float THROTTLE_EXPO = 0.5;    // 油門指數曲線因子 (Throttle Expo: 0.0 = linear, 1.0 = cubic)
 
 // --- 全域對象 (Global Objects) ---
 DSM2048 rx; // DSMX 接收機對象 (DSMX Receiver Object)
@@ -64,7 +64,7 @@ bool isInSetupMode = false;    // 是否處於設定模式 (Setup Mode Flag)
 int savedOffsetL = 0;          // 左舵機 EEPROM 偏置值 (Saved Left Servo Offset)
 int savedOffsetR = 0;          // 右舵機 EEPROM 偏置值 (Saved Right Servo Offset)
 bool isGlobalReverse = false;  // 全域正反向標記 (Global Servo Reverse Flag)
-int setupStep = 0;             // 當前設定頁面 (Current Setup Step: 0=1.1, 1=1.2, 2=2.1)
+int setupStep = 0;             // 當前設定頁面 (Current Setup Step: 0=Trim, 1=Reverse)
 unsigned long rudderLeftTimer = 0; // 方向舵左打計時器 (Timer for Rudder-Left-Hold)
 bool rudderRightPushed = false; // 方向舵右打防連發 (Flag for Rudder-Right-Click)
 
@@ -107,20 +107,13 @@ void updateLED() {
     unsigned long t = now % cycleTime;
     bool ledOn = false;
 
-    if (setupStep == 0) { // 1.1 (1長3短)
+    if (setupStep == 0) { // 1.1 (1L 3S) - Servo Trim Mode
       if (t < 600) ledOn = true;
       else if (t >= 800 && t < 950) ledOn = true;
       else if (t >= 1100 && t < 1250) ledOn = true;
       else if (t >= 1400 && t < 1550) ledOn = true;
     } 
-    else if (setupStep == 1) { // 1.2 (1長4短)
-      if (t < 600) ledOn = true;
-      else if (t >= 800 && t < 950) ledOn = true;
-      else if (t >= 1100 && t < 1250) ledOn = true;
-      else if (t >= 1400 && t < 1550) ledOn = true;
-      else if (t >= 1700 && t < 1850) ledOn = true;
-    }
-    else if (setupStep == 2) { // 2.1 (2長2短)
+    else if (setupStep == 1) { // 2.1 (2L 2S) - Servo Reverse Mode
       if (t < 600) ledOn = true;
       else if (t >= 800 && t < 1400) ledOn = true;
       else if (t >= 1600 && t < 1750) ledOn = true;
@@ -145,7 +138,7 @@ void updateLED() {
 }
 
 void setup() {
-  Serial.begin(115200); 
+  Serial1.begin(115200); 
   debug.begin(38400);   
   debug.println("Butterfly Ornithopter Setup Mode Ready");
 
@@ -199,7 +192,7 @@ void loop() {
     if (isInSetupMode) {
       if (rxRudder > 1900) {
         if (!rudderRightPushed) {
-          setupStep = (setupStep + 1) % 3;
+          setupStep = (setupStep + 1) % 2;
           rudderRightPushed = true;
           debug.print("Switch Mode: "); debug.println(setupStep);
         }
@@ -225,17 +218,42 @@ void loop() {
       }
 
       if (rxRudder > 1400 && rxRudder < 1600) {
-        if (setupStep == 0) { 
-          if (rxAileron > 1900) { if (!aileronPushed) { savedOffsetL += 11; aileronPushed = true; } }
-          else if (rxAileron < 1100) { if (!aileronPushed) { savedOffsetL -= 11; aileronPushed = true; } }
-          else aileronPushed = false;
+        if (setupStep == 0) { // 雙舵微調模式 (Servo Trim Mode)
+          // 調整副翼 (Aileron) -> 一邊高一邊低 (Differential trim)
+          if (rxAileron > 1900) {
+            if (!aileronPushed) {
+              savedOffsetL += 11;
+              savedOffsetR += 11;
+              aileronPushed = true;
+            }
+          } else if (rxAileron < 1100) {
+            if (!aileronPushed) {
+              savedOffsetL -= 11;
+              savedOffsetR -= 11;
+              aileronPushed = true;
+            }
+          } else {
+            aileronPushed = false;
+          }
+
+          // 調整升降 (Elevator) -> 兩邊一起高低 (Common-mode trim)
+          if (rxElevator > 1900) {
+            if (!elevatorPushed) {
+              savedOffsetL += 11;
+              savedOffsetR -= 11;
+              elevatorPushed = true;
+            }
+          } else if (rxElevator < 1100) {
+            if (!elevatorPushed) {
+              savedOffsetL -= 11;
+              savedOffsetR += 11;
+              elevatorPushed = true;
+            }
+          } else {
+            elevatorPushed = false;
+          }
         } 
-        else if (setupStep == 1) { 
-          if (rxElevator > 1900) { if (!elevatorPushed) { savedOffsetR += 11; elevatorPushed = true; } }
-          else if (rxElevator < 1100) { if (!elevatorPushed) { savedOffsetR -= 11; elevatorPushed = true; } }
-          else elevatorPushed = false;
-        }
-        else if (setupStep == 2) { 
+        else if (setupStep == 1) { // 正反向設定模式 (Servo Reverse Mode)
           if (rxAileron > 1900 || rxAileron < 1100) {
             if (!aileronPushed) {
               isGlobalReverse = !isGlobalReverse;
@@ -269,14 +287,25 @@ void loop() {
       int mult = isGlobalReverse ? -1 : 1;
       int commonPitch = (int)(eleInput * 0.44); 
       int diffYaw = (int)(rudInput * 0.44);
-      int centerL = PWM_CENTER + savedOffsetL + (commonPitch + diffYaw) * mult; 
-      int centerR = PWM_CENTER + savedOffsetR - (commonPitch - diffYaw) * mult; 
+      int centerL = PWM_CENTER + savedOffsetL + (commonPitch - diffYaw) * mult; 
+      int centerR = PWM_CENTER + savedOffsetR - (commonPitch + diffYaw) * mult; 
 
       if (rxThrottle > THROTTLE_ARM_PWM) {
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
-        float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
+        // 套用 Expo 指數曲線：tScaleExpo = (1 - k) * tScale + k * tScale^3
+        float tScaleExpo = (1.0 - THROTTLE_EXPO) * tScale + THROTTLE_EXPO * tScale * tScale * tScale;
+        float currentFreq = LIMIT_FREQ_MIN + (tScaleExpo * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
         float ampScale = constrain((rxAmpCh - 1000) / 1000.0, 0.0, 1.0);
         float currentAmp = AMP_MIN_US + (ampScale * (AMP_MAX_US - AMP_MIN_US));
+
+        // --- 動態舵速安全保護 (Dynamic Servo Speed Protection) ---
+        // 確保任何油門(頻率)與振幅組合下，最大角速度不超過負載安全上限 520°/s。
+        // 計算公式：A_us_max = (520 * 11.11) / (2 * PI * f) = 919.5 / f
+        float maxSafeAmp = 919.5 / currentFreq;
+        if (currentAmp > maxSafeAmp) {
+          currentAmp = maxSafeAmp;
+        }
+
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
         float diffAmp = ailInput * 0.88; 
@@ -299,6 +328,6 @@ void loop() {
   updateLED();
 }
 
-void serialEvent() {
-  while (Serial.available()) rx.handleSerialEvent(Serial.read(), micros());
+void serialEvent1() {
+  while (Serial1.available()) rx.handleSerialEvent(Serial1.read(), micros());
 }

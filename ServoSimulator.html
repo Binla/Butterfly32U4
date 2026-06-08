@@ -1,0 +1,1789 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Butterfly Ornithopter Servo & Linkage Simulator</title>
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(22, 28, 45, 0.6);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary: #3b82f6;
+            --primary-glow: rgba(59, 130, 246, 0.3);
+            --accent-l: #ec4899;
+            --accent-r: #10b981;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.1) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.05) 0px, transparent 50%);
+        }
+
+        header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(11, 15, 25, 0.8);
+            backdrop-filter: blur(12px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .header-title h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-title p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.2rem;
+        }
+
+        .status-badges {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .badge {
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            border: 1px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .badge-armed {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border-color: rgba(16, 185, 129, 0.2);
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.1);
+        }
+
+        .badge-disarmed {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .badge-setup {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning);
+            border-color: rgba(245, 158, 11, 0.2);
+        }
+
+        main {
+            flex: 1;
+            padding: 2rem;
+            max-width: 1600px;
+            width: 100%;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 2rem;
+        }
+
+        @media (max-width: 1100px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(59, 130, 246, 0.2);
+            box-shadow: 0 4px 30px rgba(59, 130, 246, 0.05);
+        }
+
+        .card-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 3px solid var(--primary);
+            padding-left: 0.5rem;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .slider-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .slider-label span.val {
+            color: var(--text-main);
+            font-family: monospace;
+            font-weight: 600;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 5px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            outline: none;
+            transition: background 0.3s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--primary);
+            cursor: pointer;
+            box-shadow: 0 0 8px var(--primary);
+            transition: transform 0.1s, background-color 0.2s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            background: #60a5fa;
+        }
+
+        .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+            user-select: none;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+        }
+
+        .checkbox-wrapper input {
+            cursor: pointer;
+        }
+
+        .content-area {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .viz-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 900px) {
+            .viz-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .canvas-container {
+            width: 100%;
+            height: 320px;
+            background: rgba(10, 12, 22, 0.8);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 320px;
+            width: 100%;
+        }
+
+        .analysis-card {
+            background: linear-gradient(135deg, rgba(22, 28, 45, 0.8), rgba(30, 41, 59, 0.8));
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .metric-box {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .metric-title {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            font-family: monospace;
+        }
+
+        .metric-value.left {
+            color: var(--accent-l);
+        }
+
+        .metric-value.right {
+            color: var(--accent-r);
+        }
+
+        .metric-value.warn {
+            color: var(--warning);
+        }
+
+        .analysis-text {
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: #d1d5db;
+        }
+
+        .analysis-text p {
+            margin-bottom: 0.75rem;
+        }
+
+        .analysis-text ul {
+            margin-left: 1.25rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .analysis-text li {
+            margin-bottom: 0.35rem;
+        }
+
+        .alert-box {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            border: 1px solid transparent;
+            font-size: 0.8rem;
+            margin-bottom: 1rem;
+            line-height: 1.5;
+        }
+
+        .alert-info {
+            background: rgba(59, 130, 246, 0.1);
+            color: #93c5fd;
+            border-color: rgba(59, 130, 246, 0.2);
+        }
+
+        .alert-warning {
+            background: rgba(245, 158, 11, 0.1);
+            color: #fde047;
+            border-color: rgba(245, 158, 11, 0.2);
+        }
+
+        /* Responsive Layout Details */
+        .flex-row-wrap {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 0.35rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        .btn-active {
+            background: var(--primary);
+            border-color: var(--primary);
+            box-shadow: 0 0 8px var(--primary-glow);
+        }
+
+        .tab-btn-group {
+            display: flex;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 2px;
+            margin-bottom: 1rem;
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.4rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn.active {
+            background: rgba(22, 28, 45, 0.9);
+            color: var(--text-main);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .reset-link {
+            color: var(--primary);
+            cursor: pointer;
+            margin-left: 0.5rem;
+            font-size: 0.7rem;
+            text-decoration: underline;
+            user-select: none;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .reset-link:hover {
+            opacity: 1;
+            color: #60a5fa;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-title">
+            <h1>Butterfly Ornithopter Servo & Linkage Simulator</h1>
+            <p>模擬 Arduino 程式控制與 2D 機構連桿运动，診斷上下行程不對稱問題</p>
+        </div>
+        <div class="status-badges">
+            <span id="badge-armed" class="badge badge-armed">● Armed</span>
+            <span id="badge-setup" class="badge badge-setup" style="display: none;">⚙ Setup Mode</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Sidebar containing inputs -->
+        <div class="sidebar">
+            
+            <!-- Drive Type Selection -->
+            <div class="card">
+                <div class="card-title">機構驅動方式 (Drive Type)</div>
+                <div class="tab-btn-group" style="margin-bottom: 0.75rem;">
+                    <button class="tab-btn" id="btn-drive-linkage">四連桿推桿</button>
+                    <button class="tab-btn active" id="btn-drive-direct">舵機直驅翅膀</button>
+                </div>
+                <button class="btn" id="btn-reset-all" style="width: 100%; margin-top: 0.5rem; padding: 0.4rem; font-weight: 600; background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.25);">🔄 恢復全域預設值</button>
+            </div>
+
+            <!-- RC Channels Input -->
+            <div class="card">
+                <div class="card-title">遙控器信號輸入 (RC Inputs)</div>
+                <div class="control-group">
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>Ch7 安全開關 (Armed/Disarmed)</span>
+                            <span>
+                                <span class="val" id="val-safety">2000</span>
+                                <span class="reset-link" data-slider="safety" data-default="2000">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-safety" min="1000" max="2000" value="2000">
+                    </div>
+                    
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>Ch1 油門 (Throttle - 頻率/啟動)</span>
+                            <span>
+                                <span class="val" id="val-throttle">1500</span>
+                                <span class="reset-link" data-slider="throttle" data-default="1500">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-throttle" min="1000" max="2000" value="1500">
+                    </div>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>Ch6 振幅通道 (Amplitude)</span>
+                            <span>
+                                <span class="val" id="val-ampCh">1800</span>
+                                <span class="reset-link" data-slider="ampCh" data-default="1800">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-ampCh" min="1000" max="2000" value="1800">
+                    </div>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>Ch2 副翼 (Aileron - 滾轉差動)</span>
+                            <span>
+                                <span class="val" id="val-aileron">1500</span>
+                                <span class="reset-link" data-slider="aileron" data-default="1500">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-aileron" min="1000" max="2000" value="1500">
+                    </div>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>Ch3 升降 (Elevator - 俯仰同動)</span>
+                            <span>
+                                <span class="val" id="val-elevator">1500</span>
+                                <span class="reset-link" data-slider="elevator" data-default="1500">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-elevator" min="1000" max="2000" value="1500">
+                    </div>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>Ch4 方向 (Rudder - 偏航差動)</span>
+                            <span>
+                                <span class="val" id="val-rudder">1500</span>
+                                <span class="reset-link" data-slider="rudder" data-default="1500">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-rudder" min="1000" max="2000" value="1500">
+                    </div>
+                </div>
+            </div>
+
+            <!-- EEPROM Trims & Settings -->
+            <div class="card">
+                <div class="card-title">軟體微調與參數 (EEPROM & Software Settings)</div>
+                <div class="control-group">
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>左舵機微調偏置 (savedOffsetL)</span>
+                            <span>
+                                <span class="val" id="val-offsetL">0</span>
+                                <span class="reset-link" data-slider="offsetL" data-default="0">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-offsetL" min="-300" max="300" value="0">
+                    </div>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>右舵機微調偏置 (savedOffsetR)</span>
+                            <span>
+                                <span class="val" id="val-offsetR">0</span>
+                                <span class="reset-link" data-slider="offsetR" data-default="0">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-offsetR" min="-300" max="300" value="0">
+                    </div>
+
+                    <label class="checkbox-wrapper">
+                        <input type="checkbox" id="input-reverse">
+                        <span>全域舵機正反向 (isGlobalReverse)</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Mechanical Linkage Settings -->
+            <div class="card" id="card-linkage-settings" style="display: none;">
+                <div class="card-title">機構連桿幾何參數 (Mechanical Linkage)</div>
+                <div class="control-group">
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>舵機臂長度 R (mm)</span>
+                            <span>
+                                <span class="val" id="val-link-R">12</span>
+                                <span class="reset-link" data-slider="linkR" data-default="12">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-link-R" min="5" max="25" value="12">
+                    </div>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>翅膀搖臂 A (mm)</span>
+                            <span>
+                                <span class="val" id="val-link-A">15</span>
+                                <span class="reset-link" data-slider="linkA" data-default="15">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-link-A" min="5" max="25" value="15">
+                    </div>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>推桿長度 L (mm)</span>
+                            <span>
+                                <span class="val" id="val-link-L">30</span>
+                                <span class="reset-link" data-slider="linkL" data-default="30">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-link-L" min="15" max="50" value="30">
+                    </div>
+
+                    <label class="checkbox-wrapper" style="margin-top: -0.25rem; margin-bottom: 0.25rem;">
+                        <input type="checkbox" id="input-lock-neutral-wing" checked>
+                        <span>中立點 (PWM 1500) 鎖定在水平位置 (0°)</span>
+                    </label>
+
+                    <div class="slider-wrapper">
+                        <div class="slider-label">
+                            <span>舵機臂安裝角度偏差 (Spline Offset)</span>
+                            <span>
+                                <span class="val" id="val-spline-offset">0°</span>
+                                <span class="reset-link" data-slider="splineOffset" data-default="0">重置</span>
+                            </span>
+                        </div>
+                        <input type="range" id="input-spline-offset" min="-45" max="45" value="0">
+                    </div>
+
+                    <div class="alert-box alert-info" style="margin-top:0.5rem; margin-bottom:0;">
+                        💡 <b>舵機臂安裝角度偏差：</b>舵機臂在 PWM=1500 時的安裝傾角。如果舵機臂沒有安裝在水平位置，會產生顯著的上下行程不對稱！
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right container area -->
+        <div class="content-area">
+            
+            <!-- Visualizers -->
+            <div class="viz-grid">
+                <!-- Mechanical Motion Animation -->
+                <div class="card">
+                    <div class="card-title">撲翼連桿機構即時動態 (2D Kinematic Animation)</div>
+                    <div class="canvas-container">
+                        <canvas id="motionCanvas" width="400" height="300"></canvas>
+                    </div>
+                    <div style="display:flex; justify-content: space-between; margin-top:0.75rem;">
+                        <button class="btn btn-active" id="btn-play-pause">暫停動畫</button>
+                        <button class="btn" id="btn-reset-phase">重置相位</button>
+                    </div>
+                </div>
+
+                <!-- Signal Chart / Wing Angle Chart -->
+                <div class="card">
+                    <div class="tab-btn-group">
+                        <button class="tab-btn active" id="tab-chart-pwm">舵機 PWM 訊號 (us)</button>
+                        <button class="tab-btn" id="tab-chart-wing">翅膀拍動角度 (deg)</button>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="waveformChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Diagnostics and Analysis -->
+            <div class="card analysis-card">
+                <div class="card-title">行程對稱性診斷與數據分析 (Diagnostics & Diagnostics)</div>
+                
+                <div class="metric-grid">
+                    <!-- Left Servo Metrics -->
+                    <div class="metric-box">
+                        <span class="metric-title">左翼拍動角度區間</span>
+                        <span class="metric-value left" id="metric-left-wing-range">0.0° ~ 0.0°</span>
+                    </div>
+                    <!-- Right Servo Metrics -->
+                    <div class="metric-box">
+                        <span class="metric-title">右翼拍動角度區間</span>
+                        <span class="metric-value right" id="metric-right-wing-range">0.0° ~ 0.0°</span>
+                    </div>
+                    <!-- Left PWM Range -->
+                    <div class="metric-box">
+                        <span class="metric-title">左舵機 PWM 區間</span>
+                        <span class="metric-value" style="color: #60a5fa;" id="metric-left-pwm">1500 ~ 1500 us</span>
+                    </div>
+                    <!-- Right PWM Range -->
+                    <div class="metric-box">
+                        <span class="metric-title">右舵機 PWM 區間</span>
+                        <span class="metric-value" style="color: #a78bfa;" id="metric-right-pwm">1500 ~ 1500 us</span>
+                    </div>
+                </div>
+
+                <div class="metric-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 1.5rem;">
+                    <div class="metric-box" style="border-color: rgba(239, 68, 68, 0.2);">
+                        <span class="metric-title" style="color: var(--danger);">左翼行程不對稱度 (Asymmetry)</span>
+                        <span class="metric-value warn" id="metric-left-asym">0.0%</span>
+                    </div>
+                    <div class="metric-box" style="border-color: rgba(239, 68, 68, 0.2);">
+                        <span class="metric-title" style="color: var(--danger);">右翼行程不對稱度 (Asymmetry)</span>
+                        <span class="metric-value warn" id="metric-right-asym">0.0%</span>
+                    </div>
+                </div>
+
+                <div class="metric-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 1.5rem;">
+                    <div class="metric-box">
+                        <span class="metric-title">當前拍動頻率</span>
+                        <span class="metric-value" style="color: #3b82f6;" id="metric-current-freq">0.00 Hz</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="metric-title">所需最高舵速</span>
+                        <span class="metric-value" id="metric-required-speed">0°/s</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="metric-title">舵機速度負載率 (7.4V)</span>
+                        <span class="metric-value" id="metric-speed-load-ratio">0.0%</span>
+                    </div>
+                </div>
+
+                <div class="alert-box alert-warning" id="warning-speed-limit" style="display:none;">
+                    ⚠️ <b>警告：超出舵機速度極限！</b> 當前設定需要最高 <span id="warn-speed-val">0</span>°/s 的舵速，已超過該舵機在 7.4V 下的無載極限速度 (800°/s)。這會導致舵機嚴重發熱、訊號滯後、波形失真甚至燒毀。請降低油門(頻率)或減小振幅。
+                </div>
+                <div class="alert-box alert-info" id="warning-speed-high" style="display:none;">
+                    💡 <b>提示：舵機負載較高。</b> 當前設定的最高舵速為 <span id="info-speed-val">0</span>°/s，處於無載極限速度的 65% ~ 100% 之間。在實際飛行中，由於空氣阻力與翅膀慣性，舵機可能會明顯發熱，請注意散熱與飛行時間。
+                </div>
+                <div class="alert-box alert-info" id="warning-speed-protected" style="display:none; background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.3); color: #93c5fd;">
+                    🛡️ <b>舵速安全保護已啟動！</b> 當前油門(頻率)與振幅組合會使最高舵速達到 <span id="protect-orig-speed">0</span>°/s，已啟動防燒保護，將單邊振幅從 <span id="protect-orig-amp">0</span>° 自動限制至 <span id="protect-lim-amp">0</span>°，使實際舵速維持在安全的 <span id="protect-lim-speed">520</span>°/s 內。
+                </div>
+
+                <div class="alert-box alert-warning" id="warning-binding" style="display:none;">
+                    ⚠️ <b>警告：連桿機構發生卡死或超出物理極限！</b> 目前設定的連桿幾何無法支持此舵機角度，請調整「機構連桿參數」或減小「振幅通道」。
+                </div>
+
+                <div class="analysis-text">
+                    <p><b>🔍 診斷分析：為什麼你會覺得「上半部行程太小」？</b></p>
+                    <p>在當前的模擬中，我們可以觀察到兩個可能導致上半部行程偏小的重要因素：</p>
+                    <ul>
+                        <li><b>1. 連桿幾何的非線性傳動 (Over-center Effect)</b>：
+                            當舵機 PWM 大於 1500 (左翼向上) 或小於 1500 (右翼向上) 時，舵機臂開始朝向上方旋轉。如果舵機旋轉角度過大 (例如接近 ±90°，即 PWM 2500 / 500)，舵機臂會轉至接近垂直位置。此時<b>「舵機每旋轉一度，推桿產生的垂直位移會急劇減小」</b>。這在物理上表現為翅膀在上死點附近幾乎停滯，導致「上半部拍動行程看起來極小，而下半部行程較大」的現象。
+                        </li>
+                        <li><b>2. 舵機臂初始安裝偏置 (Spline Offset)</b>：
+                            如果在裝配時，舵機中立點 (PWM 1500) 對應的舵機臂不是水平的，而是向下傾斜，那麼當舵機向上轉動時，它會很早進入正弦波效率低下的死點，而向下轉動時則有充足的行程。這會產生嚴重的上下行程不對稱。
+                        </li>
+                        <li><b>3. 軟體中立點偏移量過大 (EEPROM Trim)</b>：
+                            如果在設定模式中調整了過大的中立點偏置量 (Offset)，會導致左右翼正弦振盪的基準點移向一側，進而造成單側的極限位置被軟體限幅 (500us 或 2500us) 裁剪，或者在機構上提早進入死點。
+                        </li>
+                    </ul>
+                    <p><b>🛠️ 建議解決方案：</b></p>
+                    <p>1. <b>機械修正 (最推薦)</b>：確保在 PWM 1500 (中立點) 時，舵機臂<b>必須嚴格水平</b>。如果使用此模擬器，可以調整<b>「舵機臂安裝角度偏差」</b>滑桿，你會發現當偏差為正值或負值時，上下拍動的角度差會急劇惡化或改善。</p>
+                    <p>2. <b>縮小擺幅</b>：如果翅膀上揚行程卡死，可以調小 Ch6 振幅通道的值（例如將 90° 縮小為 75° 或 60°），使舵機工作在線性度較高的角度範圍內（±45°至±60°），避免進入大角度的非線性區。</p>
+                    <p>3. <b>軟體非線性補償</b>：如果由於結構限制無法更改機械，我們可以在代碼中加入<b>「非線性拉伸因子」</b>或<b>「非對稱擺幅增益」</b>。例如，在上半週正弦波時，將 amplitude 乘以一個放大係數 1.15，在下半週時乘以 0.85，以抵消機構帶來的非線性衰減。</p>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // State variables
+        let animationPlaying = true;
+        let cyclePhase = 0.0;
+        let activeTab = 'pwm'; // 'pwm' or 'wing'
+        let mechanismType = 'direct'; // 'linkage' or 'direct'
+        let lastTime = performance.now();
+
+        // PWM calculations constants from Butterfly.ino
+        const PWM_CENTER = 1500;
+        const LIMIT_FREQ_MIN = 1.56;
+        const LIMIT_FREQ_MAX = 3.125;
+        const US_PER_DEGREE = 11.11;
+        const AMP_MIN_US = 40.0 * US_PER_DEGREE;
+        const AMP_MAX_US = 90.0 * US_PER_DEGREE;
+        const THROTTLE_EXPO = 0.5; // Throttle expo factor
+        const THROTTLE_ARM_PWM = 1080;
+        const SAFETY_THRESHOLD = 1600;
+        const WING_STOP_L = 2100;
+        const WING_STOP_R = 900;
+        const SERVO_LIMIT_MIN = 500;
+        const SERVO_LIMIT_MAX = 2500;
+
+        // Kinematics canvas
+        const canvas = document.getElementById('motionCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Waveform Chart
+        let chart = null;
+
+        // DOM elements
+        const inputs = {
+            safety: document.getElementById('input-safety'),
+            throttle: document.getElementById('input-throttle'),
+            ampCh: document.getElementById('input-ampCh'),
+            aileron: document.getElementById('input-aileron'),
+            elevator: document.getElementById('input-elevator'),
+            rudder: document.getElementById('input-rudder'),
+            offsetL: document.getElementById('input-offsetL'),
+            offsetR: document.getElementById('input-offsetR'),
+            reverse: document.getElementById('input-reverse'),
+            
+            // Linkage
+            linkR: document.getElementById('input-link-R'),
+            linkA: document.getElementById('input-link-A'),
+            linkL: document.getElementById('input-link-L'),
+            splineOffset: document.getElementById('input-spline-offset'),
+            lockNeutral: document.getElementById('input-lock-neutral-wing')
+        };
+
+        const values = {
+            safety: document.getElementById('val-safety'),
+            throttle: document.getElementById('val-throttle'),
+            ampCh: document.getElementById('val-ampCh'),
+            aileron: document.getElementById('val-aileron'),
+            elevator: document.getElementById('val-elevator'),
+            rudder: document.getElementById('val-rudder'),
+            offsetL: document.getElementById('val-offsetL'),
+            offsetR: document.getElementById('val-offsetR'),
+            
+            // Linkage
+            linkR: document.getElementById('val-link-R'),
+            linkA: document.getElementById('val-link-A'),
+            linkL: document.getElementById('val-link-L'),
+            splineOffset: document.getElementById('val-spline-offset')
+        };
+
+        const badges = {
+            armed: document.getElementById('badge-armed'),
+            setup: document.getElementById('badge-setup')
+        };
+
+        // Initialize values display and listeners
+        function initListeners() {
+            Object.keys(inputs).forEach(key => {
+                const eventType = (inputs[key].type === 'checkbox') ? 'change' : 'input';
+                inputs[key].addEventListener(eventType, () => {
+                    updateValDisplay(key);
+                    updateSimulator();
+                });
+            });
+
+            document.getElementById('btn-drive-linkage').addEventListener('click', function() {
+                mechanismType = 'linkage';
+                this.classList.add('active');
+                document.getElementById('btn-drive-direct').classList.remove('active');
+                document.getElementById('card-linkage-settings').style.display = 'block';
+                updateSimulator();
+            });
+
+            document.getElementById('btn-drive-direct').addEventListener('click', function() {
+                mechanismType = 'direct';
+                this.classList.add('active');
+                document.getElementById('btn-drive-linkage').classList.remove('active');
+                document.getElementById('card-linkage-settings').style.display = 'none';
+                updateSimulator();
+            });
+
+            document.getElementById('btn-play-pause').addEventListener('click', function() {
+                animationPlaying = !animationPlaying;
+                this.textContent = animationPlaying ? '暫停動畫' : '播放動畫';
+                this.classList.toggle('btn-active', animationPlaying);
+            });
+
+            document.getElementById('btn-reset-phase').addEventListener('click', function() {
+                cyclePhase = 0.0;
+                updateSimulator();
+            });
+
+            document.getElementById('tab-chart-pwm').addEventListener('click', function() {
+                activeTab = 'pwm';
+                this.classList.add('active');
+                document.getElementById('tab-chart-wing').classList.remove('active');
+                updateSimulator();
+            });
+
+            document.getElementById('tab-chart-wing').addEventListener('click', function() {
+                activeTab = 'wing';
+                this.classList.add('active');
+                document.getElementById('tab-chart-pwm').classList.remove('active');
+                updateSimulator();
+            });
+
+            // Individual Reset Links
+            document.querySelectorAll('.reset-link').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const sliderId = this.getAttribute('data-slider');
+                    const defaultVal = this.getAttribute('data-default');
+                    if (inputs[sliderId]) {
+                        inputs[sliderId].value = defaultVal;
+                        updateValDisplay(sliderId);
+                        updateSimulator();
+                    }
+                });
+            });
+
+            // Global Reset Button
+            document.getElementById('btn-reset-all').addEventListener('click', function() {
+                // Reset inputs
+                inputs.safety.value = 2000;
+                inputs.throttle.value = 1500;
+                inputs.ampCh.value = 1800;
+                inputs.aileron.value = 1500;
+                inputs.elevator.value = 1500;
+                inputs.rudder.value = 1500;
+                
+                inputs.offsetL.value = 0;
+                inputs.offsetR.value = 0;
+                inputs.reverse.checked = false;
+                
+                inputs.linkR.value = 12;
+                inputs.linkA.value = 15;
+                inputs.linkL.value = 30;
+                inputs.splineOffset.value = 0;
+                inputs.lockNeutral.checked = true;
+
+                // Update displays
+                Object.keys(inputs).forEach(key => {
+                    updateValDisplay(key);
+                });
+                
+                updateSimulator();
+            });
+        }
+
+        function updateValDisplay(key) {
+            if (!values[key]) return;
+            let val = inputs[key].value;
+            if (key === 'splineOffset') {
+                values[key].textContent = val + '°';
+            } else {
+                values[key].textContent = val;
+            }
+        }
+
+        // Initialize UI values
+        Object.keys(inputs).forEach(key => {
+            updateValDisplay(key);
+        });
+
+        // Arduino servo output calculation logic
+        function calculateServoPWMs(phase, overrides = {}) {
+            // Read inputs (or overrides for sweep plotting)
+            const rxSafetyCh = overrides.safety !== undefined ? overrides.safety : parseInt(inputs.safety.value);
+            const rxThrottle = overrides.throttle !== undefined ? overrides.throttle : parseInt(inputs.throttle.value);
+            const rxAmpCh = overrides.ampCh !== undefined ? overrides.ampCh : parseInt(inputs.ampCh.value);
+            const rxAileron = overrides.aileron !== undefined ? overrides.aileron : parseInt(inputs.aileron.value);
+            const rxElevator = overrides.elevator !== undefined ? overrides.elevator : parseInt(inputs.elevator.value);
+            const rxRudder = overrides.rudder !== undefined ? overrides.rudder : parseInt(inputs.rudder.value);
+            const savedOffsetL = overrides.offsetL !== undefined ? overrides.offsetL : parseInt(inputs.offsetL.value);
+            const savedOffsetR = overrides.offsetR !== undefined ? overrides.offsetR : parseInt(inputs.offsetR.value);
+            const isGlobalReverse = overrides.reverse !== undefined ? overrides.reverse : inputs.reverse.checked;
+
+            let outL = WING_STOP_L;
+            let outR = WING_STOP_R;
+            let isArmed = false;
+
+            if (rxSafetyCh > SAFETY_THRESHOLD) {
+                // Simplified Arming detection (always assume armed if safety is high for simulation convenience)
+                isArmed = true; 
+                
+                const ailInput = rxAileron - PWM_CENTER;
+                const eleInput = rxElevator - PWM_CENTER;
+                const rudInput = rxRudder - PWM_CENTER;
+                const mult = isGlobalReverse ? -1 : 1;
+                
+                const commonPitch = Math.round(eleInput * 0.44);
+                const diffYaw = Math.round(rudInput * 0.44);
+                
+                const centerL = PWM_CENTER + savedOffsetL + (commonPitch + diffYaw) * mult;
+                const centerR = PWM_CENTER + savedOffsetR - (commonPitch - diffYaw) * mult;
+
+                if (rxThrottle > THROTTLE_ARM_PWM) {
+                    const tScale = Math.min(Math.max((rxThrottle - THROTTLE_ARM_PWM) / (2000 - THROTTLE_ARM_PWM), 0.0), 1.0);
+                    const currentFreq = LIMIT_FREQ_MIN + tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
+                    const ampScale = Math.min(Math.max((rxAmpCh - 1000) / 1000.0, 0.0), 1.0);
+                    let currentAmp = AMP_MIN_US + ampScale * (AMP_MAX_US - AMP_MIN_US);
+                    
+                    // --- 動態舵速安全保護 (Dynamic Servo Speed Protection) ---
+                    // 確保最大舵速不超過負載上限 520°/s
+                    // 公式：A_us_max = (520 * 11.11) / (2 * PI * f) = 919.5 / f
+                    const maxSafeAmp = 919.5 / currentFreq;
+                    if (currentAmp > maxSafeAmp) {
+                        currentAmp = maxSafeAmp;
+                    }
+                    
+                    const diffAmp = ailInput * 0.88;
+                    let ampL = currentAmp - diffAmp;
+                    let ampR = currentAmp + diffAmp;
+                    if (ampL < 0.0) ampL = 0.0;
+                    if (ampR < 0.0) ampR = 0.0;
+                    
+                    const wave = Math.sin(phase);
+                    outL = centerL + Math.round(wave * ampL * mult);
+                    outR = centerR - Math.round(wave * ampR * mult);
+                } else {
+                    outL = centerL;
+                    outR = centerR;
+                }
+            } else {
+                // Disarmed Stop Positions
+                outL = WING_STOP_L;
+                outR = WING_STOP_R;
+            }
+
+            // Apply constraints
+            outL = Math.min(Math.max(outL, SERVO_LIMIT_MIN), SERVO_LIMIT_MAX);
+            outR = Math.min(Math.max(outR, SERVO_LIMIT_MIN), SERVO_LIMIT_MAX);
+
+            return { outL, outR, isArmed };
+        }
+
+        // Kinematics solver: circle-circle intersection
+        // Finds the intersection point that represents the lower pushrod attachment
+        function solveLinkage(servoPWM, side, geom) {
+            // Convert PWM to servo angle in radians
+            const degPerUs = 0.09;
+            const splineOffsetRad = geom.splineOffset * Math.PI / 180;
+            
+            let alpha = (servoPWM - PWM_CENTER) * degPerUs * Math.PI / 180;
+            let theta = 0;
+            
+            if (side === 'left') {
+                theta = Math.PI - alpha - splineOffsetRad;
+            } else {
+                theta = 0 - alpha + splineOffsetRad; // Symmetric spline offset!
+            }
+
+            // Servo arm tip position P
+            const P = {
+                x: geom.servoPos.x + geom.R * Math.cos(theta),
+                y: geom.servoPos.y + geom.R * Math.sin(theta)
+            };
+
+            // Hinge position H
+            const H = geom.hingePos;
+            
+            // Solve intersection of:
+            // Circle 1: Centered at H with radius A (wing arm attachment locus)
+            // Circle 2: Centered at P with radius L (pushrod linkage)
+            const x1 = H.x;
+            const y1 = H.y;
+            const r1 = geom.A;
+            const x2 = P.x;
+            const y2 = P.y;
+            const r2 = geom.L;
+
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const d = Math.sqrt(dx * dx + dy * dy);
+
+            if (d > r1 + r2 || d < Math.abs(r1 - r2)) {
+                return { error: true, P, W: null, wingAngle: 0 }; // Binding!
+            }
+
+            const a = (r1 * r1 - r2 * r2 + d * d) / (2 * d);
+            const h = Math.sqrt(Math.max(0, r1 * r1 - a * a));
+
+            const x3 = x1 + (a / d) * dx;
+            const y3 = y1 + (a / d) * dy;
+
+            const rx = (h / d) * dy;
+            const ry = (h / d) * dx;
+
+            // Two intersections
+            const p1 = { x: x3 + rx, y: y3 - ry };
+            const p2 = { x: x3 - rx, y: y3 + ry };
+
+            // We choose the lower intersection point (larger Y in Cartesian where Y is up)
+            let W = p1.y < p2.y ? p1 : p2;
+
+            // Calculate wing flapping angle phi in radians
+            let wingAngle = 0;
+            if (side === 'left') {
+                wingAngle = Math.atan2(-(W.x - H.x), -(W.y - H.y));
+            } else {
+                wingAngle = Math.atan2(W.x - H.x, -(W.y - H.y));
+            }
+
+            return { error: false, P, W, wingAngle: wingAngle * 180 / Math.PI };
+        }
+
+        // Get current mechanical geometry parameters
+        function getGeometry() {
+            const R = parseFloat(inputs.linkR.value);
+            const A = parseFloat(inputs.linkA.value);
+            let L = parseFloat(inputs.linkL.value);
+            const splineOffset = parseFloat(inputs.splineOffset.value);
+            
+            const leftServoPos = { x: -20, y: 10 };
+            const leftHingePos = { x: -40, y: 35 };
+
+            if (inputs.lockNeutral && inputs.lockNeutral.checked) {
+                // Calculate L so that at PWM 1500, left wing angle is 0
+                const splineOffsetRad = splineOffset * Math.PI / 180;
+                const theta_neutral = Math.PI - splineOffsetRad;
+                
+                const P_neutral = {
+                    x: leftServoPos.x + R * Math.cos(theta_neutral),
+                    y: leftServoPos.y + R * Math.sin(theta_neutral)
+                };
+                const W_neutral = {
+                    x: leftHingePos.x,
+                    y: leftHingePos.y - A
+                };
+                
+                const L_calc = Math.sqrt(Math.pow(W_neutral.x - P_neutral.x, 2) + Math.pow(W_neutral.y - P_neutral.y, 2));
+                if (!isNaN(L_calc) && L_calc > 0) {
+                    L = L_calc;
+                    inputs.linkL.value = L;
+                    values.linkL.textContent = L.toFixed(2) + ' (Locked)';
+                    inputs.linkL.disabled = true;
+                }
+            } else {
+                inputs.linkL.disabled = false;
+            }
+
+            return {
+                R, A, L, splineOffset,
+                left: {
+                    servoPos: leftServoPos,
+                    hingePos: leftHingePos,
+                    R, A, L, splineOffset
+                },
+                right: {
+                    servoPos: { x: 20, y: 10 },
+                    hingePos: { x: 40, y: 35 },
+                    R, A, L, splineOffset
+                }
+            };
+        }
+
+        // Get wing flapping angles based on mechanism type
+        function getWingAngles(cycleL, cycleR, geom) {
+            if (mechanismType === 'direct') {
+                // In direct drive, 1us = 0.09 degrees.
+                // Left wing: higher PWM is UP. So wingAngle = (outL - 1500) * 0.09
+                let wingAngleL = (cycleL - PWM_CENTER) * 0.09;
+                // Right wing: lower PWM is UP. So wingAngle = (1500 - outR) * 0.09
+                let wingAngleR = (PWM_CENTER - cycleR) * 0.09;
+                
+                const leftPos = { x: -30, y: 25 };
+                const rightPos = { x: 30, y: 25 };
+                
+                return {
+                    left: { error: false, P: leftPos, W: leftPos, wingAngle: wingAngleL, hingePos: leftPos },
+                    right: { error: false, P: rightPos, W: rightPos, wingAngle: wingAngleR, hingePos: rightPos }
+                };
+            } else {
+                const resL = solveLinkage(cycleL, 'left', geom.left);
+                const resR = solveLinkage(cycleR, 'right', geom.right);
+                return {
+                    left: { ...resL, hingePos: geom.left.hingePos },
+                    right: { ...resR, hingePos: geom.right.hingePos }
+                };
+            }
+        }
+
+        // Draw ornithopter 2D mechanical linkage
+        function drawAnimation(cycleL, cycleR) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw background grid
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
+            ctx.lineWidth = 1;
+            for(let x=0; x<canvas.width; x+=20) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for(let y=0; y<canvas.height; y+=20) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+
+            const scale = 2.4;
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2 + 60;
+
+            const transform = (p) => {
+                return {
+                    x: cx + p.x * scale,
+                    y: cy - p.y * scale // Invert Y for screen coordinates
+                };
+            };
+
+            const geom = getGeometry();
+            const wingAngles = getWingAngles(cycleL, cycleR, geom);
+            const resL = wingAngles.left;
+            const resR = wingAngles.right;
+
+            // Display binding warnings
+            const warningBox = document.getElementById('warning-binding');
+            if (mechanismType === 'linkage' && (resL.error || resR.error)) {
+                warningBox.style.display = 'block';
+            } else {
+                warningBox.style.display = 'none';
+            }
+
+            // Draw fuselage frame
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            
+            let fL, fR, sL, sR;
+            if (mechanismType === 'direct') {
+                fL = transform({ x: -30, y: 25 });
+                fR = transform({ x: 30, y: 25 });
+                sL = transform({ x: -30, y: 25 });
+                sR = transform({ x: 30, y: 25 });
+            } else {
+                fL = transform(geom.left.hingePos);
+                fR = transform(geom.right.hingePos);
+                sL = transform(geom.left.servoPos);
+                sR = transform(geom.right.servoPos);
+            }
+            
+            ctx.moveTo(fL.x, fL.y);
+            ctx.lineTo(fR.x, fR.y);
+            if (mechanismType === 'linkage') {
+                ctx.lineTo(sR.x, sR.y);
+                ctx.lineTo(sL.x, sL.y);
+                ctx.closePath();
+            }
+            ctx.stroke();
+
+            // Central vertical spine
+            ctx.beginPath();
+            ctx.moveTo(cx, fL.y - 20);
+            ctx.lineTo(cx, sL.y - 40);
+            ctx.stroke();
+
+            // Draw horizontal reference line through hinges (0 deg plane)
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(0, fL.y);
+            ctx.lineTo(canvas.width, fL.y);
+            ctx.stroke();
+            
+            // Add label
+            ctx.font = 'bold 12px sans-serif';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3;
+            ctx.lineJoin = 'round';
+            ctx.strokeText('0° 水平參考線', 10, fL.y - 5);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('0° 水平參考線', 10, fL.y - 5);
+            ctx.restore();
+
+            // Calculate dynamic peak limits (UP/DOWN envelope)
+            let maxAngleL = -Infinity;
+            let minAngleL = Infinity;
+            let maxAngleR = -Infinity;
+            let minAngleR = Infinity;
+            
+            for (let p = 0; p < 2 * Math.PI; p += 0.15) {
+                const pwms = calculateServoPWMs(p);
+                const angles = getWingAngles(pwms.outL, pwms.outR, geom);
+                if (!angles.left.error) {
+                    maxAngleL = Math.max(maxAngleL, angles.left.wingAngle);
+                    minAngleL = Math.min(minAngleL, angles.left.wingAngle);
+                }
+                if (!angles.right.error) {
+                    maxAngleR = Math.max(maxAngleR, angles.right.wingAngle);
+                    minAngleR = Math.min(minAngleR, angles.right.wingAngle);
+                }
+            }
+
+            // Draw dynamic peak envelope horizontal lines
+            ctx.save();
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 3]);
+
+            if (maxAngleL !== -Infinity && minAngleL !== Infinity && !resL.error) {
+                const hL = resL.hingePos;
+                const yL_max = hL.y + 45 * Math.sin(maxAngleL * Math.PI / 180);
+                const yL_min = hL.y + 45 * Math.sin(minAngleL * Math.PI / 180);
+                const tYL_max = transform({ x: 0, y: yL_max }).y;
+                const tYL_min = transform({ x: 0, y: yL_min }).y;
+
+                // Draw Left UP Peak line (Pink)
+                ctx.strokeStyle = 'rgba(236, 72, 153, 0.4)';
+                ctx.beginPath();
+                ctx.moveTo(0, tYL_max);
+                ctx.lineTo(cx, tYL_max);
+                ctx.stroke();
+
+                // Draw Left DOWN Peak line (Pink)
+                ctx.beginPath();
+                ctx.moveTo(0, tYL_min);
+                ctx.lineTo(cx, tYL_min);
+                ctx.stroke();
+
+                // Draw Left text labels
+                ctx.font = 'bold 12px sans-serif';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3;
+                ctx.lineJoin = 'round';
+                
+                ctx.strokeText('左上極限: ' + maxAngleL.toFixed(1) + '°', 10, tYL_max - 5);
+                ctx.fillStyle = '#ff33aa'; // Bright neon pink
+                ctx.fillText('左上極限: ' + maxAngleL.toFixed(1) + '°', 10, tYL_max - 5);
+
+                ctx.strokeText('左下極限: ' + minAngleL.toFixed(1) + '°', 10, tYL_min + 14);
+                ctx.fillText('左下極限: ' + minAngleL.toFixed(1) + '°', 10, tYL_min + 14);
+            }
+
+            if (maxAngleR !== -Infinity && minAngleR !== Infinity && !resR.error) {
+                const hR = resR.hingePos;
+                const yR_max = hR.y + 45 * Math.sin(maxAngleR * Math.PI / 180);
+                const yR_min = hR.y + 45 * Math.sin(minAngleR * Math.PI / 180);
+                const tYR_max = transform({ x: 0, y: yR_max }).y;
+                const tYR_min = transform({ x: 0, y: yR_min }).y;
+
+                // Draw Right UP Peak line (Green)
+                ctx.strokeStyle = 'rgba(16, 185, 129, 0.4)';
+                ctx.beginPath();
+                ctx.moveTo(cx, tYR_max);
+                ctx.lineTo(canvas.width, tYR_max);
+                ctx.stroke();
+
+                // Draw Right DOWN Peak line (Green)
+                ctx.beginPath();
+                ctx.moveTo(cx, tYR_min);
+                ctx.lineTo(canvas.width, tYR_min);
+                ctx.stroke();
+
+                // Draw Right text labels
+                ctx.font = 'bold 12px sans-serif';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3;
+                ctx.lineJoin = 'round';
+                
+                ctx.strokeText('右上極限: ' + maxAngleR.toFixed(1) + '°', canvas.width - 105, tYR_max - 5);
+                ctx.fillStyle = '#00ff88'; // Bright neon green
+                ctx.fillText('右上極限: ' + maxAngleR.toFixed(1) + '°', canvas.width - 105, tYR_max - 5);
+
+                ctx.strokeText('右下極限: ' + minAngleR.toFixed(1) + '°', canvas.width - 105, tYR_min + 14);
+                ctx.fillText('右下極限: ' + minAngleR.toFixed(1) + '°', canvas.width - 105, tYR_min + 14);
+            }
+            ctx.restore();
+
+            // Draw Hinge Points / Servos
+            ctx.fillStyle = '#6b7280';
+            if (mechanismType === 'direct') {
+                [fL, fR].forEach(p => {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 6, 0, 2*Math.PI);
+                    ctx.fill();
+                });
+            } else {
+                [fL, fR, sL, sR].forEach(p => {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 4, 0, 2*Math.PI);
+                    ctx.fill();
+                });
+            }
+
+            // 1. LEFT SIDE DRAWING
+            if (!resL.error) {
+                const H_t = transform(resL.hingePos);
+                
+                if (mechanismType === 'linkage') {
+                    const P_t = transform(resL.P);
+                    const W_t = transform(resL.W);
+                    
+                    // Servo horn (Pink)
+                    ctx.strokeStyle = 'var(--accent-l)';
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(sL.x, sL.y);
+                    ctx.lineTo(P_t.x, P_t.y);
+                    ctx.stroke();
+
+                    // Pushrod (Light blue)
+                    ctx.strokeStyle = '#60a5fa';
+                    ctx.lineWidth = 2.5;
+                    ctx.beginPath();
+                    ctx.moveTo(P_t.x, P_t.y);
+                    ctx.lineTo(W_t.x, W_t.y);
+                    ctx.stroke();
+
+                    // Wing control arm
+                    ctx.strokeStyle = 'var(--text-main)';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(H_t.x, H_t.y);
+                    ctx.lineTo(W_t.x, W_t.y);
+                    ctx.stroke();
+                    
+                    // Join nodes
+                    ctx.fillStyle = '#f3f4f6';
+                    [P_t, W_t].forEach(p => {
+                        ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 2*Math.PI); ctx.fill();
+                    });
+                } else {
+                    // Direct drive left: draw a rotating servo horn/disc at hinge
+                    ctx.strokeStyle = 'var(--accent-l)';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(H_t.x, H_t.y, 12, 0, 2*Math.PI);
+                    ctx.stroke();
+                }
+
+                // Wing main spar (extends outward)
+                const wingAngleRad = resL.wingAngle * Math.PI / 180;
+                const wingTip = {
+                    x: resL.hingePos.x - 45 * Math.cos(wingAngleRad),
+                    y: resL.hingePos.y + 45 * Math.sin(wingAngleRad)
+                };
+                const wingTip_t = transform(wingTip);
+                
+                ctx.strokeStyle = 'var(--accent-l)';
+                ctx.lineWidth = 5;
+                ctx.beginPath();
+                ctx.moveTo(H_t.x, H_t.y);
+                ctx.lineTo(wingTip_t.x, wingTip_t.y);
+                ctx.stroke();
+            }
+
+            // 2. RIGHT SIDE DRAWING
+            if (!resR.error) {
+                const H_t = transform(resR.hingePos);
+                
+                if (mechanismType === 'linkage') {
+                    const P_t = transform(resR.P);
+                    const W_t = transform(resR.W);
+                    
+                    // Servo horn (Green)
+                    ctx.strokeStyle = 'var(--accent-r)';
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(sR.x, sR.y);
+                    ctx.lineTo(P_t.x, P_t.y);
+                    ctx.stroke();
+
+                    // Pushrod
+                    ctx.strokeStyle = '#60a5fa';
+                    ctx.lineWidth = 2.5;
+                    ctx.beginPath();
+                    ctx.moveTo(P_t.x, P_t.y);
+                    ctx.lineTo(W_t.x, W_t.y);
+                    ctx.stroke();
+
+                    // Wing control arm
+                    ctx.strokeStyle = 'var(--text-main)';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(H_t.x, H_t.y);
+                    ctx.lineTo(W_t.x, W_t.y);
+                    ctx.stroke();
+                    
+                    // Join nodes
+                    ctx.fillStyle = '#f3f4f6';
+                    [P_t, W_t].forEach(p => {
+                        ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 2*Math.PI); ctx.fill();
+                    });
+                } else {
+                    // Direct drive right
+                    ctx.strokeStyle = 'var(--accent-r)';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(H_t.x, H_t.y, 12, 0, 2*Math.PI);
+                    ctx.stroke();
+                }
+
+                // Wing main spar
+                const wingAngleRad = resR.wingAngle * Math.PI / 180;
+                const wingTip = {
+                    x: resR.hingePos.x + 45 * Math.cos(wingAngleRad),
+                    y: resR.hingePos.y + 45 * Math.sin(wingAngleRad)
+                };
+                const wingTip_t = transform(wingTip);
+                
+                ctx.strokeStyle = 'var(--accent-r)';
+                ctx.lineWidth = 5;
+                ctx.beginPath();
+                ctx.moveTo(H_t.x, H_t.y);
+                ctx.lineTo(wingTip_t.x, wingTip_t.y);
+                ctx.stroke();
+            }
+        }
+
+        // Generate data for plotting and diagnostics
+        function generatePlotData() {
+            const steps = 100;
+            const phases = [];
+            const leftPWMs = [];
+            const rightPWMs = [];
+            const leftWings = [];
+            const rightWings = [];
+
+            const geom = getGeometry();
+
+            for (let i = 0; i <= steps; i++) {
+                const phase = (i / steps) * 2 * Math.PI;
+                phases.push(phase);
+                
+                const { outL, outR } = calculateServoPWMs(phase);
+                leftPWMs.push(outL);
+                rightPWMs.push(outR);
+
+                const wingAngles = getWingAngles(outL, outR, geom);
+                const resL = wingAngles.left;
+                const resR = wingAngles.right;
+
+                leftWings.push(resL.error ? null : resL.wingAngle);
+                rightWings.push(resR.error ? null : resR.wingAngle);
+            }
+
+            return { phases, leftPWMs, rightPWMs, leftWings, rightWings };
+        }
+
+        // Update charts and diagnostics metrics
+        function updateChartsAndMetrics(data) {
+            // 1. Update charts
+            const labelDegrees = data.phases.map(p => Math.round(p * 180 / Math.PI) + '°');
+            
+            let datasetLeft, datasetRight, titleY;
+            if (activeTab === 'pwm') {
+                datasetLeft = data.leftPWMs;
+                datasetRight = data.rightPWMs;
+                titleY = 'PWM 脈寬 (us)';
+            } else {
+                datasetLeft = data.leftWings;
+                datasetRight = data.rightWings;
+                titleY = '翅膀拍動角 (度)';
+            }
+
+            chart.data.labels = labelDegrees;
+            chart.data.datasets[0].data = datasetLeft;
+            chart.data.datasets[0].label = activeTab === 'pwm' ? '左舵機 (Left Servo PWM)' : '左翅膀角度 (Left Wing Angle)';
+            chart.data.datasets[1].data = datasetRight;
+            chart.data.datasets[1].label = activeTab === 'pwm' ? '右舵機 (Right Servo PWM)' : '右翅膀角度 (Right Wing Angle)';
+            
+            // Adjust chart axes limits
+            if (activeTab === 'pwm') {
+                chart.options.scales.y.min = 400;
+                chart.options.scales.y.max = 2600;
+            } else {
+                chart.options.scales.y.min = -70;
+                chart.options.scales.y.max = 70;
+            }
+            chart.options.scales.y.title.text = titleY;
+            chart.update('none'); // Update without animation for smoother response
+
+            // 2. Compute metrics
+            // Filter out nulls (errors)
+            const validL_PWM = data.leftPWMs.filter(x => x !== null);
+            const validR_PWM = data.rightPWMs.filter(x => x !== null);
+            const validL_Wing = data.leftWings.filter(x => x !== null);
+            const validR_Wing = data.rightWings.filter(x => x !== null);
+
+            const minL_PWM = Math.min(...validL_PWM);
+            const maxL_PWM = Math.max(...validL_PWM);
+            const minR_PWM = Math.min(...validR_PWM);
+            const maxR_PWM = Math.max(...validR_PWM);
+
+            document.getElementById('metric-left-pwm').textContent = `${minL_PWM} ~ ${maxL_PWM} us`;
+            document.getElementById('metric-right-pwm').textContent = `${minR_PWM} ~ ${maxR_PWM} us`;
+
+            if (validL_Wing.length > 0) {
+                const minL_Wing = Math.min(...validL_Wing);
+                const maxL_Wing = Math.max(...validL_Wing);
+                document.getElementById('metric-left-wing-range').textContent = `${minL_Wing.toFixed(1)}° ~ ${maxL_Wing.toFixed(1)}°`;
+                
+                // Asymmetry index
+                // Upper stroke is wingAngle > 0, Lower stroke is wingAngle < 0
+                // Percentage asymmetry = (UpperStroke - LowerStroke) / (TotalStroke)
+                const upperL = maxL_Wing > 0 ? maxL_Wing : 0;
+                const lowerL = minL_Wing < 0 ? -minL_Wing : 0;
+                const totalL = upperL + lowerL;
+                const asymL = totalL > 0 ? ((upperL - lowerL) / totalL) * 100 : 0;
+                
+                const el = document.getElementById('metric-left-asym');
+                el.textContent = `${asymL > 0 ? '+' : ''}${asymL.toFixed(1)}%`;
+                el.style.color = Math.abs(asymL) > 10 ? 'var(--warning)' : 'var(--success)';
+                if (Math.abs(asymL) > 25) el.style.color = 'var(--danger)';
+            } else {
+                document.getElementById('metric-left-wing-range').textContent = '卡死/錯誤';
+                document.getElementById('metric-left-asym').textContent = 'Error';
+            }
+
+            if (validR_Wing.length > 0) {
+                const minR_Wing = Math.min(...validR_Wing);
+                const maxR_Wing = Math.max(...validR_Wing);
+                document.getElementById('metric-right-wing-range').textContent = `${minR_Wing.toFixed(1)}° ~ ${maxR_Wing.toFixed(1)}°`;
+
+                const upperR = maxR_Wing > 0 ? maxR_Wing : 0;
+                const lowerR = minR_Wing < 0 ? -minR_Wing : 0;
+                const totalR = upperR + lowerR;
+                const asymR = totalR > 0 ? ((upperR - lowerR) / totalR) * 100 : 0;
+                
+                const el = document.getElementById('metric-right-asym');
+                el.textContent = `${asymR > 0 ? '+' : ''}${asymR.toFixed(1)}%`;
+                el.style.color = Math.abs(asymR) > 10 ? 'var(--warning)' : 'var(--success)';
+                if (Math.abs(asymR) > 25) el.style.color = 'var(--danger)';
+            } else {
+                document.getElementById('metric-right-wing-range').textContent = '卡死/錯誤';
+                document.getElementById('metric-right-asym').textContent = 'Error';
+            }
+
+            // 2.5 Calculate and update required speed metrics
+            const rxThrottle = parseInt(inputs.throttle.value);
+            const rxAmpCh = parseInt(inputs.ampCh.value);
+            const safety = parseInt(inputs.safety.value);
+            
+            let currentFreq = 0.0;
+            if (safety > SAFETY_THRESHOLD && rxThrottle > THROTTLE_ARM_PWM) {
+                const tScale = Math.min(Math.max((rxThrottle - THROTTLE_ARM_PWM) / (2000 - THROTTLE_ARM_PWM), 0.0), 1.0);
+                const tScaleExpo = (1.0 - THROTTLE_EXPO) * tScale + THROTTLE_EXPO * Math.pow(tScale, 3);
+                currentFreq = LIMIT_FREQ_MIN + tScaleExpo * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
+            }
+            
+            const ampScale = Math.min(Math.max((rxAmpCh - 1000) / 1000.0, 0.0), 1.0);
+            const originalAmpUs = AMP_MIN_US + ampScale * (AMP_MAX_US - AMP_MIN_US);
+            const originalAmpDeg = originalAmpUs / US_PER_DEGREE;
+            const originalReqSpeed = 2 * Math.PI * currentFreq * originalAmpDeg;
+            
+            let currentAmpUs = originalAmpUs;
+            const maxSafeAmp = 919.5 / currentFreq;
+            const isProtected = currentFreq > 0 && originalAmpUs > maxSafeAmp;
+            
+            if (isProtected) {
+                currentAmpUs = maxSafeAmp;
+            }
+            const currentAmpDeg = currentAmpUs / US_PER_DEGREE;
+            const actualReqSpeed = 2 * Math.PI * currentFreq * currentAmpDeg;
+            
+            // Limit speed for PTK 7432 @ 7.4V (0.075s/60deg = 800deg/s)
+            const servoLimit = 800.0;
+            const originalSpeedRatio = (originalReqSpeed / servoLimit) * 100;
+            const actualSpeedRatio = (actualReqSpeed / servoLimit) * 100;
+            
+            document.getElementById('metric-current-freq').textContent = `${currentFreq.toFixed(2)} Hz`;
+            
+            const speedValueEl = document.getElementById('metric-required-speed');
+            const ratioEl = document.getElementById('metric-speed-load-ratio');
+            const protectAlert = document.getElementById('warning-speed-protected');
+            
+            if (isProtected) {
+                speedValueEl.innerHTML = `${Math.round(actualReqSpeed)}°/s <span style="font-size: 0.75rem; color: var(--warning); display: block;">(已由 ${Math.round(originalReqSpeed)}°/s 限制)</span>`;
+                ratioEl.innerHTML = `${actualSpeedRatio.toFixed(1)}% <span style="font-size: 0.75rem; color: var(--warning); display: block;">(已由 ${originalSpeedRatio.toFixed(1)}% 限制)</span>`;
+                ratioEl.style.color = 'var(--warning)';
+                
+                protectAlert.style.display = 'block';
+                document.getElementById('protect-orig-speed').textContent = Math.round(originalReqSpeed);
+                document.getElementById('protect-orig-amp').textContent = originalAmpDeg.toFixed(1);
+                document.getElementById('protect-lim-amp').textContent = currentAmpDeg.toFixed(1);
+                
+                document.getElementById('warning-speed-limit').style.display = 'none';
+                document.getElementById('warning-speed-high').style.display = 'none';
+            } else {
+                speedValueEl.textContent = `${Math.round(actualReqSpeed)}°/s`;
+                ratioEl.textContent = `${actualSpeedRatio.toFixed(1)}%`;
+                protectAlert.style.display = 'none';
+                
+                if (actualSpeedRatio > 100) {
+                    ratioEl.style.color = 'var(--danger)';
+                    document.getElementById('warning-speed-limit').style.display = 'block';
+                    document.getElementById('warning-speed-high').style.display = 'none';
+                    document.getElementById('warn-speed-val').textContent = Math.round(actualReqSpeed);
+                } else if (actualSpeedRatio > 65) {
+                    ratioEl.style.color = 'var(--warning)';
+                    document.getElementById('warning-speed-limit').style.display = 'none';
+                    document.getElementById('warning-speed-high').style.display = 'block';
+                    document.getElementById('info-speed-val').textContent = Math.round(actualReqSpeed);
+                } else {
+                    ratioEl.style.color = 'var(--success)';
+                    document.getElementById('warning-speed-limit').style.display = 'none';
+                    document.getElementById('warning-speed-high').style.display = 'none';
+                }
+            }
+
+            // 3. Update badges
+            if (safety <= SAFETY_THRESHOLD) {
+                badges.armed.style.display = 'none';
+                badges.setup.style.display = 'none';
+                document.querySelector('header').style.borderBottomColor = 'rgba(239, 68, 68, 0.3)';
+            } else {
+                badges.armed.style.display = 'flex';
+                badges.setup.style.display = 'none';
+                document.querySelector('header').style.borderBottomColor = 'rgba(16, 185, 129, 0.3)';
+            }
+        }
+
+        // Main simulator update step
+        function updateSimulator() {
+            const data = generatePlotData();
+            updateChartsAndMetrics(data);
+            
+            // If animation is paused, draw the frame at current phase
+            if (!animationPlaying) {
+                const outputs = calculateServoPWMs(cyclePhase);
+                drawAnimation(outputs.outL, outputs.outR);
+            }
+        }
+
+        // Initialize Chart.js
+        function initChart() {
+            const ctxChart = document.getElementById('waveformChart').getContext('2d');
+            chart = new Chart(ctxChart, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '左翼 (L)',
+                            borderColor: '#ec4899',
+                            backgroundColor: 'rgba(236, 72, 153, 0.05)',
+                            borderWidth: 3,
+                            pointRadius: 0,
+                            fill: true,
+                            tension: 0.1
+                        },
+                        {
+                            label: '右翼 (R)',
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.05)',
+                            borderWidth: 3,
+                            pointRadius: 0,
+                            fill: true,
+                            tension: 0.1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#f3f4f6',
+                                font: {
+                                    family: 'Inter'
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)'
+                            },
+                            ticks: {
+                                color: '#9ca3af',
+                                maxTicksLimit: 12
+                            },
+                            title: {
+                                display: true,
+                                text: '拍動相位 (Phase)',
+                                color: '#f3f4f6'
+                            }
+                        },
+                        y: {
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)'
+                            },
+                            ticks: {
+                                color: '#9ca3af'
+                            },
+                            title: {
+                                display: true,
+                                text: 'PWM 訊號 (us)',
+                                color: '#f3f4f6'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Animation loop
+        function runLoop(timestamp) {
+            const dt = (timestamp - lastTime) / 1000.0;
+            lastTime = timestamp;
+
+            if (animationPlaying) {
+                const rxThrottle = parseInt(inputs.throttle.value);
+                const rxSafetyCh = parseInt(inputs.safety.value);
+
+                if (rxSafetyCh > SAFETY_THRESHOLD && rxThrottle > THROTTLE_ARM_PWM) {
+                    const tScale = Math.min(Math.max((rxThrottle - THROTTLE_ARM_PWM) / (2000 - THROTTLE_ARM_PWM), 0.0), 1.0);
+                    const tScaleExpo = (1.0 - THROTTLE_EXPO) * tScale + THROTTLE_EXPO * Math.pow(tScale, 3);
+                    const currentFreq = LIMIT_FREQ_MIN + tScaleExpo * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
+                    
+                    cyclePhase += currentFreq * dt * 2 * Math.PI;
+                    if (cyclePhase > 2 * Math.PI) {
+                        cyclePhase -= 2 * Math.PI;
+                    }
+                }
+
+                const outputs = calculateServoPWMs(cyclePhase);
+                drawAnimation(outputs.outL, outputs.outR);
+            }
+
+            requestAnimationFrame(runLoop);
+        }
+
+        // Main initialisation
+        window.addEventListener('DOMContentLoaded', () => {
+            initChart();
+            initListeners();
+            updateSimulator();
+            requestAnimationFrame(runLoop);
+        });
+    </script>
+</body>
+</html>
