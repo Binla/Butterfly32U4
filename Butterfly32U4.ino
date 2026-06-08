@@ -6,9 +6,9 @@
 // Ch2: 副翼 (Aileron / エルロン) - Roll / Trim (Differential: one side high, one side low) / 左右差動微調
 // Ch3: 升降 (Elevator / エレベーター) - Pitch / Trim (Common: both sides together) / 兩邊同步高低微調
 // Ch4: 方向 (Rudder / ラダー) - Yaw / Setup Menu / ヨー、設定モード切替・保存
-// Ch5: 未使用 (Unused / 未使用)
+// Ch5: 安全 (Safety / セーフティ) - Arm/Disarm Switch / アームスイッチ (保持水平)
 // Ch6: 振幅 (Amplitude / 振幅) - Flapping Angle (40~90°) / 拍動角度
-// Ch7: 安全 (Safety / セーフティ) - Arm/Disarm Switch / アームスイッチ
+// Ch7: 緊急 (Emergency / 緊急) - Emergency Stop (Wings UP) / 緊急開關 (舵機上揚)
 // 
 // --- LED 狀態指示 (LED Status / LED ステータス) ---
 // 1. 常亮 (Solid / 点灯): 未解鎖 (Disarmed / 未解除)
@@ -79,6 +79,7 @@ volatile int rxElevator = 1500;
 volatile int rxRudder   = 1500; 
 volatile int rxAmpCh    = 1500; 
 volatile int rxSafetyCh = 1000; 
+volatile int rxEmergencyCh = 1000; 
 
 // --- PWM 硬體定時器初始化 (Setup Hardware Timer for 333Hz PWM) ---
 void setupPWM333Hz() {
@@ -167,8 +168,9 @@ void loop() {
     rxAileron   = ch[1]; 
     rxElevator  = ch[2]; 
     rxRudder    = ch[3]; 
+    rxSafetyCh  = ch[4]; 
     rxAmpCh     = ch[5]; 
-    rxSafetyCh  = ch[6]; 
+    rxEmergencyCh = ch[6]; 
   }
 
   // --- USB Serial Debugging (Print when disarmed or in setup mode / 每秒列印一次) ---
@@ -188,7 +190,8 @@ void loop() {
       Serial.print(" | Ail: "); Serial.print(rxAileron);
       Serial.print(" | Ele: "); Serial.print(rxElevator);
       Serial.print(" | Rud: "); Serial.print(rxRudder);
-      Serial.print(" | Saf: "); Serial.println(rxSafetyCh);
+      Serial.print(" | Saf: "); Serial.print(rxSafetyCh);
+      Serial.print(" | Emg: "); Serial.println(rxEmergencyCh);
     }
   }
 
@@ -197,8 +200,8 @@ void loop() {
   lastMicros = currentMicros;
   if (dt < 0 || dt > 0.1) dt = 0; 
 
-  int outL = WING_STOP_L; 
-  int outR = WING_STOP_R; 
+  int outL = PWM_CENTER + savedOffsetL; 
+  int outR = PWM_CENTER + savedOffsetR; 
 
   if (rxSafetyCh <= SAFETY_THRESHOLD) {
     isSystemArmed = false; 
@@ -318,14 +321,17 @@ void loop() {
       outL = PWM_CENTER + savedOffsetL;
       outR = PWM_CENTER + savedOffsetR;
     } else {
-      outL = WING_STOP_L;
-      outR = WING_STOP_R;
+      outL = PWM_CENTER + savedOffsetL;
+      outR = PWM_CENTER + savedOffsetR;
     }
   } else {
     isInSetupMode = false; 
     if (!isSystemArmed) {
       if (rxThrottle < THROTTLE_ARM_PWM + 20) isSystemArmed = true; 
-      else { outL = WING_STOP_L; outR = WING_STOP_R; }
+      else { 
+        outL = PWM_CENTER + savedOffsetL; 
+        outR = PWM_CENTER + savedOffsetR; 
+      }
     }
     if (isSystemArmed) {
       int ailInput = (rxAileron - PWM_CENTER);      
@@ -370,6 +376,15 @@ void loop() {
       }
     }
   }
+
+  // --- Emergency Switch Override (Has highest priority, forces wings up and disarms) ---
+  if (rxEmergencyCh > SAFETY_THRESHOLD) {
+    isSystemArmed = false;
+    isInSetupMode = false;
+    outL = WING_STOP_L;
+    outR = WING_STOP_R;
+  }
+
   writePWM(PIN_SERVO_L, outL);
   writePWM(PIN_SERVO_R, outR);
   updateLED();
