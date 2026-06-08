@@ -327,7 +327,7 @@ void loop() {
   } else {
     isInSetupMode = false; 
     if (!isSystemArmed) {
-      if (rxThrottle < THROTTLE_ARM_PWM + 20) isSystemArmed = true; 
+      if (rxThrottle < 1050) isSystemArmed = true; 
       else { 
         outL = PWM_CENTER + savedOffsetL; 
         outR = PWM_CENTER + savedOffsetR; 
@@ -340,8 +340,8 @@ void loop() {
       int mult = isGlobalReverse ? -1 : 1;
       int commonPitch = (int)(eleInput * 0.44); 
       int diffYaw = (int)(rudInput * 0.44);
-      int centerL = PWM_CENTER + savedOffsetL + (commonPitch + diffYaw) * mult; 
-      int centerR = PWM_CENTER + savedOffsetR - (commonPitch - diffYaw) * mult; 
+      int centerL = PWM_CENTER + savedOffsetL + (-commonPitch + diffYaw) * mult; 
+      int centerR = PWM_CENTER + savedOffsetR + (commonPitch + diffYaw) * mult; 
 
       if (rxThrottle > THROTTLE_ARM_PWM) {
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
