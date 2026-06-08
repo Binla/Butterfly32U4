@@ -138,9 +138,11 @@ void updateLED() {
 }
 
 void setup() {
+  Serial.begin(115200); // USB virtual serial for debugging
   Serial1.begin(115200); 
   debug.begin(38400);   
   debug.println("Butterfly Ornithopter Setup Mode Ready");
+  Serial.println("Butterfly Ornithopter Setup Mode Ready");
 
   EEPROM.get(0, savedOffsetL);
   EEPROM.get(2, savedOffsetR);
@@ -169,6 +171,27 @@ void loop() {
     rxSafetyCh  = ch[6]; 
   }
 
+  // --- USB Serial Debugging (Print when disarmed or in setup mode / 每秒列印一次) ---
+  static unsigned long lastDebugPrintTime = 0;
+  if (!isSystemArmed && (millis() - lastDebugPrintTime > 1000)) {
+    lastDebugPrintTime = millis();
+    if (isInSetupMode) {
+      Serial.print("[Setup Page "); Serial.print(setupStep == 0 ? "1.1" : "2.1"); Serial.print("] ");
+      Serial.print("Thr: "); Serial.print(rxThrottle);
+      Serial.print(" | Ail: "); Serial.print(rxAileron);
+      Serial.print(" | Ele: "); Serial.print(rxElevator);
+      Serial.print(" | Rud: "); Serial.print(rxRudder);
+      Serial.print(" | OffsetL: "); Serial.print(savedOffsetL);
+      Serial.print(" | OffsetR: "); Serial.println(savedOffsetR);
+    } else {
+      Serial.print("Thr: "); Serial.print(rxThrottle);
+      Serial.print(" | Ail: "); Serial.print(rxAileron);
+      Serial.print(" | Ele: "); Serial.print(rxElevator);
+      Serial.print(" | Rud: "); Serial.print(rxRudder);
+      Serial.print(" | Saf: "); Serial.println(rxSafetyCh);
+    }
+  }
+
   unsigned long currentMicros = micros();
   float dt = (currentMicros - lastMicros) / 1000000.0;
   lastMicros = currentMicros;
@@ -180,27 +203,49 @@ void loop() {
   if (rxSafetyCh <= SAFETY_THRESHOLD) {
     isSystemArmed = false; 
     
-    if (rxThrottle < 1100 && rxRudder > 1900) {
+    if (rxThrottle < 1150 && rxRudder > 1800) {
       if (!isInSetupMode) {
         isInSetupMode = true;
         setupStep = 0;
         rudderRightPushed = true; 
         debug.println("Entering Setup Mode (1.1)");
+        Serial.println("Entering Setup Mode (1.1)");
       }
     }
 
     if (isInSetupMode) {
-      if (rxRudder > 1900) {
+      // --- Reset Offsets Shortcut (Left stick bottom-right, Right stick top-right for 1.5s) ---
+      static unsigned long resetTimer = 0;
+      if (rxThrottle < 1150 && rxRudder > 1800 && rxAileron > 1800 && rxElevator > 1800) {
+        if (resetTimer == 0) resetTimer = millis();
+        if (millis() - resetTimer > 1500) {
+          savedOffsetL = 0;
+          savedOffsetR = 0;
+          debug.println("Offsets Reset to 0.");
+          Serial.println("Offsets Reset to 0.");
+          // Rapid LED blinking confirmation
+          for (int i = 0; i < 5; i++) {
+            digitalWrite(PIN_LED, LOW); delay(100);
+            digitalWrite(PIN_LED, HIGH); delay(100);
+          }
+          resetTimer = 0;
+        }
+      } else {
+        resetTimer = 0;
+      }
+
+      if (rxRudder > 1800) {
         if (!rudderRightPushed) {
           setupStep = (setupStep + 1) % 2;
           rudderRightPushed = true;
-          debug.print("Switch Mode: "); debug.println(setupStep);
+          debug.print("Switch Page: "); debug.println(setupStep == 0 ? "1.1" : "2.1");
+          Serial.print("Switch Page: "); Serial.println(setupStep == 0 ? "1.1" : "2.1");
         }
       } else if (rxRudder < 1600) {
         rudderRightPushed = false;
       }
 
-      if (rxRudder < 1100) {
+      if (rxRudder < 1200) {
         if (rudderLeftTimer == 0) rudderLeftTimer = millis();
         if (millis() - rudderLeftTimer > 3000) {
           EEPROM.put(0, savedOffsetL);
@@ -209,6 +254,7 @@ void loop() {
           isInSetupMode = false;
           rudderLeftTimer = 0;
           debug.println("Settings Saved.");
+          Serial.println("Settings Saved.");
           digitalWrite(PIN_LED, LOW); delay(1000);
           digitalWrite(PIN_LED, HIGH); delay(2000);
           digitalWrite(PIN_LED, LOW); delay(1000);
@@ -259,6 +305,7 @@ void loop() {
               isGlobalReverse = !isGlobalReverse;
               aileronPushed = true;
               debug.print("Reverse: "); debug.println(isGlobalReverse);
+              Serial.print("Reverse: "); Serial.println(isGlobalReverse);
               writePWM(PIN_SERVO_L, PWM_CENTER + savedOffsetL + 200);
               writePWM(PIN_SERVO_R, PWM_CENTER + savedOffsetR + 200);
               delay(150);
