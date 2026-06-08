@@ -38,7 +38,7 @@ const int SERVO_LIMIT_MIN = 500;   // 舵機物理極限最小值 (Servo Physica
 const int SERVO_LIMIT_MAX = 2500;  // 舵機物理極限最大值 (Servo Physical Limit Max)
 
 const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Safety Switch Threshold - Ch7)
-const int THROTTLE_ARM_PWM = 1080; // 油門解鎖閾值 (Throttle Arming Threshold)
+const int THROTTLE_ARM_PWM = 1100; // 油門解鎖閾值 (Throttle Arming Threshold)
 const int WING_STOP_L = 2100;    // 左舵機上揚停止位 (Left Wing Stop Position - UP)
 const int WING_STOP_R = 900;     // 右舵機上揚停止位 (Right Wing Stop Position - UP)
 
@@ -327,7 +327,7 @@ void loop() {
   } else {
     isInSetupMode = false; 
     if (!isSystemArmed) {
-      if (rxThrottle < 1050) isSystemArmed = true; 
+      if (rxThrottle < 1100) isSystemArmed = true; 
       else { 
         outL = PWM_CENTER + savedOffsetL; 
         outR = PWM_CENTER + savedOffsetR; 
