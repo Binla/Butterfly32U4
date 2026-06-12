@@ -457,7 +457,7 @@
                 <div class="control-group">
                     <div class="slider-wrapper">
                         <div class="slider-label">
-                            <span>Ch7 安全開關 (Armed/Disarmed)</span>
+                            <span>Ch5 安全開關 (Armed/Disarmed)</span>
                             <span>
                                 <span class="val" id="val-safety">2000</span>
                                 <span class="reset-link" data-slider="safety" data-default="2000">重置</span>
@@ -748,11 +748,11 @@
         // PWM calculations constants from Butterfly.ino
         const PWM_CENTER = 1500;
         const LIMIT_FREQ_MIN = 1.56;
-        const LIMIT_FREQ_MAX = 3.125;
+        const LIMIT_FREQ_MAX = 6.25;
         const US_PER_DEGREE = 11.11;
         const AMP_MIN_US = 40.0 * US_PER_DEGREE;
-        const AMP_MAX_US = 90.0 * US_PER_DEGREE;
-        const THROTTLE_EXPO = 0.5; // Throttle expo factor
+        const AMP_MAX_US = 70.0 * US_PER_DEGREE;
+        const THROTTLE_EXPO = 0.0; // Throttle expo factor
         const THROTTLE_ARM_PWM = 1080;
         const SAFETY_THRESHOLD = 1600;
         const WING_STOP_L = 2100;
@@ -959,10 +959,12 @@
                     // --- 動態舵速安全保護 (Dynamic Servo Speed Protection) ---
                     // 確保最大舵速不超過負載上限 520°/s
                     // 公式：A_us_max = (520 * 11.11) / (2 * PI * f) = 919.5 / f
+                    /*
                     const maxSafeAmp = 919.5 / currentFreq;
                     if (currentAmp > maxSafeAmp) {
                         currentAmp = maxSafeAmp;
                     }
+                    */
                     
                     const diffAmp = ailInput * 0.88;
                     let ampL = currentAmp - diffAmp;
@@ -1599,7 +1601,7 @@
             
             let currentAmpUs = originalAmpUs;
             const maxSafeAmp = 919.5 / currentFreq;
-            const isProtected = currentFreq > 0 && originalAmpUs > maxSafeAmp;
+            const isProtected = false; // Disabled: currentFreq > 0 && originalAmpUs > maxSafeAmp;
             
             if (isProtected) {
                 currentAmpUs = maxSafeAmp;

@@ -7,7 +7,7 @@
 // Ch3: 升降 (Elevator / エレベーター) - Pitch / Trim (Common: both sides together) / 兩邊同步高低微調
 // Ch4: 方向 (Rudder / ラダー) - Yaw / Setup Menu / ヨー、設定モード切替・保存
 // Ch5: 安全 (Safety / セーフティ) - Arm/Disarm Switch / アームスイッチ (保持水平)
-// Ch6: 振幅 (Amplitude / 振幅) - Flapping Angle (40~90°) / 拍動角度
+// Ch6: 振幅 (Amplitude / 振幅) - Flapping Angle (40~70°) / 拍動角度
 // Ch7: 緊急 (Emergency / 緊急) - Emergency Stop (Wings UP) / 緊急開關 (舵機上揚)
 // 
 // --- LED 狀態指示 (LED Status / LED ステータス) ---
@@ -44,12 +44,12 @@ const int WING_STOP_R = 900;     // 右舵機上揚停止位 (Right Wing Stop Po
 
 // --- 撲翼機動力限制 (Ornithopter Power Limits - PTK 7432 @ 8.4V) ---
 const float LIMIT_FREQ_MIN = 1.56;  // 最低拍動頻率 (Minimum Flapping Frequency Hz)
-const float LIMIT_FREQ_MAX = 3.125; // 最高拍動頻率 (Maximum Flapping Frequency Hz)
+const float LIMIT_FREQ_MAX = 6.25;  // 最高拍動頻率 (Maximum Flapping Frequency Hz)
 const float US_PER_DEGREE = 11.11;  // 每度對應的微秒換算 (1000us/90deg conversion)
 const float AMP_MIN_US = 40.0 * US_PER_DEGREE; // 最低振幅 40度 (Min Amplitude 40deg)
-const float AMP_MID_US = 75.0 * US_PER_DEGREE; // 中間振幅 75度 (Mid Amplitude 75deg)
-const float AMP_MAX_US = 90.0 * US_PER_DEGREE; // 最高振幅 90度 (Max Amplitude 90deg)
-const float THROTTLE_EXPO = 0.5;    // 油門指數曲線因子 (Throttle Expo: 0.0 = linear, 1.0 = cubic)
+const float AMP_MID_US = 55.0 * US_PER_DEGREE; // 中間振幅 55度 (Mid Amplitude 55deg)
+const float AMP_MAX_US = 70.0 * US_PER_DEGREE; // 最高振幅 70度 (Max Amplitude 70deg)
+const float THROTTLE_EXPO = 0.0;    // 油門指數曲線因子 (Throttle Expo: 0.0 = linear, 1.0 = cubic)
 
 // --- 全域對象 (Global Objects) ---
 DSM2048 rx; // DSMX 接收機對象 (DSMX Receiver Object)
@@ -354,10 +354,12 @@ void loop() {
         // --- 動態舵速安全保護 (Dynamic Servo Speed Protection) ---
         // 確保任何油門(頻率)與振幅組合下，最大角速度不超過負載安全上限 520°/s。
         // 計算公式：A_us_max = (520 * 11.11) / (2 * PI * f) = 919.5 / f
+        /*
         float maxSafeAmp = 919.5 / currentFreq;
         if (currentAmp > maxSafeAmp) {
           currentAmp = maxSafeAmp;
         }
+        */
 
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
