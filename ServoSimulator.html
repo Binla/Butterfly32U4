@@ -490,7 +490,7 @@
 
                     <div class="slider-wrapper">
                         <div class="slider-label">
-                            <span>Ch2 副翼 (Aileron - 滾轉差動)</span>
+                            <span>Ch2 副翼 (Aileron - 方向控制/舵臂高低差)</span>
                             <span>
                                 <span class="val" id="val-aileron">1500</span>
                                 <span class="reset-link" data-slider="aileron" data-default="1500">重置</span>
@@ -512,7 +512,7 @@
 
                     <div class="slider-wrapper">
                         <div class="slider-label">
-                            <span>Ch4 方向 (Rudder - 偏航差動)</span>
+                            <span>Ch4 方向 (Rudder - 設定調整使用，無飛行作用)</span>
                             <span>
                                 <span class="val" id="val-rudder">1500</span>
                                 <span class="reset-link" data-slider="rudder" data-default="1500">重置</span>
@@ -748,11 +748,10 @@
         // PWM calculations constants from Butterfly.ino
         const PWM_CENTER = 1500;
         const LIMIT_FREQ_MIN = 1.56;
-        const LIMIT_FREQ_MAX = 6.25;
+        const LIMIT_FREQ_MAX = 4.5;
         const US_PER_DEGREE = 11.11;
-        const AMP_MIN_US = 40.0 * US_PER_DEGREE;
-        const AMP_MAX_US = 70.0 * US_PER_DEGREE;
-        const THROTTLE_EXPO = 0.0; // Throttle expo factor
+        const AMP_MIN_US = 30.0 * US_PER_DEGREE;
+        const AMP_MAX_US = 85.0 * US_PER_DEGREE;
         const THROTTLE_ARM_PWM = 1080;
         const SAFETY_THRESHOLD = 1600;
         const WING_STOP_L = 2100;
@@ -931,25 +930,24 @@
             const savedOffsetR = overrides.offsetR !== undefined ? overrides.offsetR : parseInt(inputs.offsetR.value);
             const isGlobalReverse = overrides.reverse !== undefined ? overrides.reverse : inputs.reverse.checked;
 
-            let outL = WING_STOP_L;
-            let outR = WING_STOP_R;
+            const ailInput = rxAileron - PWM_CENTER;
+            const eleInput = rxElevator - PWM_CENTER;
+            const rudInput = rxRudder - PWM_CENTER;
+            const mult = isGlobalReverse ? -1 : 1;
+            
+            const commonPitch = Math.round(eleInput * 0.44);
+            const diffYaw = Math.round(ailInput * 0.44); // Ch2 Aileron controls servo height difference (direction)
+            
+            const centerL = PWM_CENTER + savedOffsetL + (-commonPitch + diffYaw) * mult;
+            const centerR = PWM_CENTER + savedOffsetR + (commonPitch + diffYaw) * mult;
+
+            let outL = centerL;
+            let outR = centerR;
             let isArmed = false;
 
             if (rxSafetyCh > SAFETY_THRESHOLD) {
-                // Simplified Arming detection (always assume armed if safety is high for simulation convenience)
                 isArmed = true; 
                 
-                const ailInput = rxAileron - PWM_CENTER;
-                const eleInput = rxElevator - PWM_CENTER;
-                const rudInput = rxRudder - PWM_CENTER;
-                const mult = isGlobalReverse ? -1 : 1;
-                
-                const commonPitch = Math.round(eleInput * 0.44);
-                const diffYaw = Math.round(rudInput * 0.44);
-                
-                const centerL = PWM_CENTER + savedOffsetL + (commonPitch + diffYaw) * mult;
-                const centerR = PWM_CENTER + savedOffsetR - (commonPitch - diffYaw) * mult;
-
                 if (rxThrottle > THROTTLE_ARM_PWM) {
                     const tScale = Math.min(Math.max((rxThrottle - THROTTLE_ARM_PWM) / (2000 - THROTTLE_ARM_PWM), 0.0), 1.0);
                     const currentFreq = LIMIT_FREQ_MIN + tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
@@ -966,7 +964,7 @@
                     }
                     */
                     
-                    const diffAmp = ailInput * 0.88;
+                    const diffAmp = 0; // Cancel flapping amplitude difference
                     let ampL = currentAmp - diffAmp;
                     let ampR = currentAmp + diffAmp;
                     if (ampL < 0.0) ampL = 0.0;
@@ -975,14 +973,7 @@
                     const wave = Math.sin(phase);
                     outL = centerL + Math.round(wave * ampL * mult);
                     outR = centerR - Math.round(wave * ampR * mult);
-                } else {
-                    outL = centerL;
-                    outR = centerR;
                 }
-            } else {
-                // Disarmed Stop Positions
-                outL = WING_STOP_L;
-                outR = WING_STOP_R;
             }
 
             // Apply constraints
@@ -1590,8 +1581,7 @@
             let currentFreq = 0.0;
             if (safety > SAFETY_THRESHOLD && rxThrottle > THROTTLE_ARM_PWM) {
                 const tScale = Math.min(Math.max((rxThrottle - THROTTLE_ARM_PWM) / (2000 - THROTTLE_ARM_PWM), 0.0), 1.0);
-                const tScaleExpo = (1.0 - THROTTLE_EXPO) * tScale + THROTTLE_EXPO * Math.pow(tScale, 3);
-                currentFreq = LIMIT_FREQ_MIN + tScaleExpo * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
+                currentFreq = LIMIT_FREQ_MIN + tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
             }
             
             const ampScale = Math.min(Math.max((rxAmpCh - 1000) / 1000.0, 0.0), 1.0);
@@ -1763,8 +1753,7 @@
 
                 if (rxSafetyCh > SAFETY_THRESHOLD && rxThrottle > THROTTLE_ARM_PWM) {
                     const tScale = Math.min(Math.max((rxThrottle - THROTTLE_ARM_PWM) / (2000 - THROTTLE_ARM_PWM), 0.0), 1.0);
-                    const tScaleExpo = (1.0 - THROTTLE_EXPO) * tScale + THROTTLE_EXPO * Math.pow(tScale, 3);
-                    const currentFreq = LIMIT_FREQ_MIN + tScaleExpo * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
+                    const currentFreq = LIMIT_FREQ_MIN + tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN);
                     
                     cyclePhase += currentFreq * dt * 2 * Math.PI;
                     if (cyclePhase > 2 * Math.PI) {

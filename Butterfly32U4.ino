@@ -3,20 +3,19 @@
 
 // --- 遙控器通道配置 (Channel Mapping / プロポのチャンネル設定) ---
 // Ch1: 油門 (Throttle / スロットル) - Flapping Frequency (Hz) / 拍動周波数
-// Ch2: 副翼 (Aileron / エルロン) - Roll / Trim (Differential: one side high, one side low) / 左右差動微調
-// Ch3: 升降 (Elevator / エレベーター) - Pitch / Trim (Common: both sides together) / 兩邊同步高低微調
-// Ch4: 方向 (Rudder / ラダー) - Yaw / Setup Menu / ヨー、設定モード切替・保存
+// Ch2: 副翼 (Aileron / エルロン) - Roll (Flapping Amplitude Difference) / 飛行中左右振幅差 (滾轉)
+// Ch3: 升降 (Elevator / エレベーター) - Pitch / Trim (Common: both sides together) / 飛行中兩邊同步高低 (俯仰) / 兩邊同步高低微調
+// Ch4: 方向 (Rudder / ラダー) - Setup Menu / 兩邊舵機高低差微調 (只作為調整設定使用，飛行中無作用)
 // Ch5: 安全 (Safety / セーフティ) - Arm/Disarm Switch / アームスイッチ (保持水平)
-// Ch6: 振幅 (Amplitude / 振幅) - Flapping Angle (40~70°) / 拍動角度
+// Ch6: 振幅 (Amplitude / 振幅) - Flapping Angle (30~85°) / 拍動角度
 // Ch7: 緊急 (Emergency / 緊急) - Emergency Stop (Wings UP) / 緊急開關 (舵機上揚)
 // 
 // --- LED 狀態指示 (LED Status / LED ステータス) ---
 // 1. 常亮 (Solid / 点灯): 未解鎖 (Disarmed / 未解除)
 // 2. 慢閃 (Slow Blink / ゆっくり点滅): 已解鎖，油門關閉 (Armed, Idle / 解除・待機中)
 // 3. 快閃 (Fast Blink / 速い点滅): 飛行中 (Flying / 飛行中)
-// 4. 設定模式 (Setup Mode / 設定モード): (Rudder Right to cycle, Left hold 3s to save)
-//    - 1.1 (1L 3S): 雙舵微調 (Servo Trim - 升降同向, 副翼反向)
-//    - 2.1 (2L 2S): 正反向 (Servo Reverse / サーボ正逆)
+// 4. 設定模式 (Setup Mode / 設定モード): (Rudder Left hold 3s to save)
+//    - 1.1 (1L 3S): 雙舵微調 (Servo Trim - 升降同向, 舵機高低差)
 // 5. 保存成功 (Saved / 保存成功): Blink pattern / 点滅確認
 
 #include <Arduino.h>         // 引用 Arduino 核心庫 (Arduino Core Library)
@@ -37,19 +36,18 @@ const int PWM_CENTER = 1500; // 標準 PWM 中立點 (Standard PWM Center)
 const int SERVO_LIMIT_MIN = 500;   // 舵機物理極限最小值 (Servo Physical Limit Min)
 const int SERVO_LIMIT_MAX = 2500;  // 舵機物理極限最大值 (Servo Physical Limit Max)
 
-const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Safety Switch Threshold - Ch7)
+const int SAFETY_THRESHOLD = 1600; // 安全開關閾值 (Safety Switch Threshold - Ch5)
 const int THROTTLE_ARM_PWM = 1100; // 油門解鎖閾值 (Throttle Arming Threshold)
 const int WING_STOP_L = 2100;    // 左舵機上揚停止位 (Left Wing Stop Position - UP)
 const int WING_STOP_R = 900;     // 右舵機上揚停止位 (Right Wing Stop Position - UP)
 
 // --- 撲翼機動力限制 (Ornithopter Power Limits - PTK 7432 @ 8.4V) ---
 const float LIMIT_FREQ_MIN = 1.56;  // 最低拍動頻率 (Minimum Flapping Frequency Hz)
-const float LIMIT_FREQ_MAX = 6.25;  // 最高拍動頻率 (Maximum Flapping Frequency Hz)
+const float LIMIT_FREQ_MAX = 4.5;   // 最高拍動頻率 (Maximum Flapping Frequency Hz)
 const float US_PER_DEGREE = 11.11;  // 每度對應的微秒換算 (1000us/90deg conversion)
-const float AMP_MIN_US = 40.0 * US_PER_DEGREE; // 最低振幅 40度 (Min Amplitude 40deg)
-const float AMP_MID_US = 55.0 * US_PER_DEGREE; // 中間振幅 55度 (Mid Amplitude 55deg)
-const float AMP_MAX_US = 70.0 * US_PER_DEGREE; // 最高振幅 70度 (Max Amplitude 70deg)
-const float THROTTLE_EXPO = 0.0;    // 油門指數曲線因子 (Throttle Expo: 0.0 = linear, 1.0 = cubic)
+const float AMP_MIN_US = 30.0 * US_PER_DEGREE; // 最低振幅 30度 (Min Amplitude 30deg)
+const float AMP_MID_US = 57.5 * US_PER_DEGREE; // 中間振幅 57.5度 (Mid Amplitude 57.5deg)
+const float AMP_MAX_US = 85.0 * US_PER_DEGREE; // 最高振幅 85度 (Max Amplitude 85deg)
 
 // --- 全域對象 (Global Objects) ---
 DSM2048 rx; // DSMX 接收機對象 (DSMX Receiver Object)
@@ -64,11 +62,15 @@ bool isInSetupMode = false;    // 是否處於設定模式 (Setup Mode Flag)
 int savedOffsetL = 0;          // 左舵機 EEPROM 偏置值 (Saved Left Servo Offset)
 int savedOffsetR = 0;          // 右舵機 EEPROM 偏置值 (Saved Right Servo Offset)
 bool isGlobalReverse = false;  // 全域正反向標記 (Global Servo Reverse Flag)
-int setupStep = 0;             // 當前設定頁面 (Current Setup Step: 0=Trim, 1=Reverse)
+int setupStep = 0;             // 當前設定頁面 (Current Setup Step: 0=Trim)
 unsigned long rudderLeftTimer = 0; // 方向舵左打計時器 (Timer for Rudder-Left-Hold)
 bool rudderRightPushed = false; // 方向舵右打防連發 (Flag for Rudder-Right-Click)
+bool rudderPushed = false;      // 防止進入設定模式時立刻微調 (Prevents adjusting trim immediately on entry)
 
 // --- 搖桿輸入狀態 (Stick Input States) ---
+// bool aileronPushed = false;   // 副翼撥動標記 (Aileron stick pushed flag)
+// bool elevatorPushed = false;  // 升降撥動標記 (Elevator stick pushed flag)
+// (aileronPushed and elevatorPushed redeclared locally/globally as needed, but we keep the globals)
 bool aileronPushed = false;   // 副翼撥動標記 (Aileron stick pushed flag)
 bool elevatorPushed = false;  // 升降撥動標記 (Elevator stick pushed flag)
 
@@ -108,18 +110,12 @@ void updateLED() {
     unsigned long t = now % cycleTime;
     bool ledOn = false;
 
-    if (setupStep == 0) { // 1.1 (1L 3S) - Servo Trim Mode
-      if (t < 600) ledOn = true;
-      else if (t >= 800 && t < 950) ledOn = true;
-      else if (t >= 1100 && t < 1250) ledOn = true;
-      else if (t >= 1400 && t < 1550) ledOn = true;
-    } 
-    else if (setupStep == 1) { // 2.1 (2L 2S) - Servo Reverse Mode
-      if (t < 600) ledOn = true;
-      else if (t >= 800 && t < 1400) ledOn = true;
-      else if (t >= 1600 && t < 1750) ledOn = true;
-      else if (t >= 1900 && t < 2050) ledOn = true;
-    }
+    // 1.1 (1L 3S) - Servo Trim Mode
+    if (t < 600) ledOn = true;
+    else if (t >= 800 && t < 950) ledOn = true;
+    else if (t >= 1100 && t < 1250) ledOn = true;
+    else if (t >= 1400 && t < 1550) ledOn = true;
+
     digitalWrite(PIN_LED, ledOn ? HIGH : LOW);
   } 
   else if (!isSystemArmed) {
@@ -178,7 +174,7 @@ void loop() {
   if (!isSystemArmed && (millis() - lastDebugPrintTime > 1000)) {
     lastDebugPrintTime = millis();
     if (isInSetupMode) {
-      Serial.print("[Setup Page "); Serial.print(setupStep == 0 ? "1.1" : "2.1"); Serial.print("] ");
+      Serial.print("[Setup Page 1.1] ");
       Serial.print("Thr: "); Serial.print(rxThrottle);
       Serial.print(" | Ail: "); Serial.print(rxAileron);
       Serial.print(" | Ele: "); Serial.print(rxElevator);
@@ -191,6 +187,7 @@ void loop() {
       Serial.print(" | Ele: "); Serial.print(rxElevator);
       Serial.print(" | Rud: "); Serial.print(rxRudder);
       Serial.print(" | Saf: "); Serial.print(rxSafetyCh);
+      Serial.print(" | Amp: "); Serial.print(rxAmpCh);
       Serial.print(" | Emg: "); Serial.println(rxEmergencyCh);
     }
   }
@@ -200,8 +197,16 @@ void loop() {
   lastMicros = currentMicros;
   if (dt < 0 || dt > 0.1) dt = 0; 
 
-  int outL = PWM_CENTER + savedOffsetL; 
-  int outR = PWM_CENTER + savedOffsetR; 
+  int ailInput = (rxAileron - PWM_CENTER);      
+  int eleInput = (rxElevator - PWM_CENTER);   
+  int mult = isGlobalReverse ? -1 : 1;
+  int commonPitch = (int)(eleInput * 0.44); 
+  int diffYaw = (int)(ailInput * 0.44); // Ch2 Aileron controls servo height difference (direction)
+  int centerL = PWM_CENTER + savedOffsetL + (-commonPitch + diffYaw) * mult; 
+  int centerR = PWM_CENTER + savedOffsetR + (commonPitch + diffYaw) * mult; 
+
+  int outL = centerL; 
+  int outR = centerR; 
 
   if (rxSafetyCh <= SAFETY_THRESHOLD) {
     isSystemArmed = false; 
@@ -211,6 +216,7 @@ void loop() {
         isInSetupMode = true;
         setupStep = 0;
         rudderRightPushed = true; 
+        rudderPushed = true; // Prevents adjusting trim immediately on entry
         debug.println("Entering Setup Mode (1.1)");
         Serial.println("Entering Setup Mode (1.1)");
       }
@@ -237,17 +243,6 @@ void loop() {
         resetTimer = 0;
       }
 
-      if (rxRudder > 1800) {
-        if (!rudderRightPushed) {
-          setupStep = (setupStep + 1) % 2;
-          rudderRightPushed = true;
-          debug.print("Switch Page: "); debug.println(setupStep == 0 ? "1.1" : "2.1");
-          Serial.print("Switch Page: "); Serial.println(setupStep == 0 ? "1.1" : "2.1");
-        }
-      } else if (rxRudder < 1600) {
-        rudderRightPushed = false;
-      }
-
       if (rxRudder < 1200) {
         if (rudderLeftTimer == 0) rudderLeftTimer = millis();
         if (millis() - rudderLeftTimer > 3000) {
@@ -256,6 +251,7 @@ void loop() {
           EEPROM.write(4, isGlobalReverse ? 1 : 0);
           isInSetupMode = false;
           rudderLeftTimer = 0;
+          rudderPushed = false; // Reset safety flag
           debug.println("Settings Saved.");
           Serial.println("Settings Saved.");
           digitalWrite(PIN_LED, LOW); delay(1000);
@@ -267,8 +263,14 @@ void loop() {
       }
 
       if (rxRudder > 1400 && rxRudder < 1600) {
-        if (setupStep == 0) { // 雙舵微調模式 (Servo Trim Mode)
-          // 調整副翼 (Aileron) -> 一邊高一邊低 (Differential trim)
+        if (rudderPushed) {
+          // 確保所有搖桿都回到中立點，才解除防誤觸保護 (Wait for sticks to center before starting trim adjustments)
+          if (rxAileron > 1400 && rxAileron < 1600 && rxElevator > 1400 && rxElevator < 1600) {
+            rudderPushed = false;
+          }
+        } else {
+          // 雙舵微調模式 (Servo Trim Mode 1.1)
+          // 1. 調整副翼 (Aileron) -> 一邊高一邊低 (Differential trim)
           if (rxAileron > 1900) {
             if (!aileronPushed) {
               savedOffsetL += 11;
@@ -285,7 +287,7 @@ void loop() {
             aileronPushed = false;
           }
 
-          // 調整升降 (Elevator) -> 兩邊一起高低 (Common-mode trim)
+          // 2. 調整升降 (Elevator) -> 兩邊一起高低 (Common-mode trim)
           if (rxElevator > 1900) {
             if (!elevatorPushed) {
               savedOffsetL += 11;
@@ -301,19 +303,6 @@ void loop() {
           } else {
             elevatorPushed = false;
           }
-        } 
-        else if (setupStep == 1) { // 正反向設定模式 (Servo Reverse Mode)
-          if (rxAileron > 1900 || rxAileron < 1100) {
-            if (!aileronPushed) {
-              isGlobalReverse = !isGlobalReverse;
-              aileronPushed = true;
-              debug.print("Reverse: "); debug.println(isGlobalReverse);
-              Serial.print("Reverse: "); Serial.println(isGlobalReverse);
-              writePWM(PIN_SERVO_L, PWM_CENTER + savedOffsetL + 200);
-              writePWM(PIN_SERVO_R, PWM_CENTER + savedOffsetR + 200);
-              delay(150);
-            }
-          } else aileronPushed = false;
         }
       }
       savedOffsetL = constrain(savedOffsetL, -500, 500);
@@ -321,33 +310,17 @@ void loop() {
       outL = PWM_CENTER + savedOffsetL;
       outR = PWM_CENTER + savedOffsetR;
     } else {
-      outL = PWM_CENTER + savedOffsetL;
-      outR = PWM_CENTER + savedOffsetR;
+      // Keep centerL and centerR so servos respond to Aileron/Elevator sticks when disarmed
     }
   } else {
     isInSetupMode = false; 
     if (!isSystemArmed) {
       if (rxThrottle < 1100) isSystemArmed = true; 
-      else { 
-        outL = PWM_CENTER + savedOffsetL; 
-        outR = PWM_CENTER + savedOffsetR; 
-      }
     }
     if (isSystemArmed) {
-      int ailInput = (rxAileron - PWM_CENTER);      
-      int eleInput = (rxElevator - PWM_CENTER);   
-      int rudInput = (rxRudder - PWM_CENTER);   
-      int mult = isGlobalReverse ? -1 : 1;
-      int commonPitch = (int)(eleInput * 0.44); 
-      int diffYaw = (int)(rudInput * 0.44);
-      int centerL = PWM_CENTER + savedOffsetL + (-commonPitch + diffYaw) * mult; 
-      int centerR = PWM_CENTER + savedOffsetR + (commonPitch + diffYaw) * mult; 
-
       if (rxThrottle > THROTTLE_ARM_PWM) {
         float tScale = constrain((rxThrottle - THROTTLE_ARM_PWM) / (float)(PWM_MAX - THROTTLE_ARM_PWM), 0.0, 1.0);
-        // 套用 Expo 指數曲線：tScaleExpo = (1 - k) * tScale + k * tScale^3
-        float tScaleExpo = (1.0 - THROTTLE_EXPO) * tScale + THROTTLE_EXPO * tScale * tScale * tScale;
-        float currentFreq = LIMIT_FREQ_MIN + (tScaleExpo * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
+        float currentFreq = LIMIT_FREQ_MIN + (tScale * (LIMIT_FREQ_MAX - LIMIT_FREQ_MIN));
         float ampScale = constrain((rxAmpCh - 1000) / 1000.0, 0.0, 1.0);
         float currentAmp = AMP_MIN_US + (ampScale * (AMP_MAX_US - AMP_MIN_US));
 
@@ -363,7 +336,7 @@ void loop() {
 
         cyclePhase += currentFreq * dt * TWO_PI;
         if (cyclePhase > TWO_PI) cyclePhase -= TWO_PI; 
-        float diffAmp = ailInput * 0.88; 
+        float diffAmp = 0.0; // Cancel flapping amplitude difference
         float ampL = currentAmp - diffAmp;
         float ampR = currentAmp + diffAmp;
         if (ampL < 0.0) ampL = 0.0;
