@@ -17,11 +17,26 @@
 // 4. 設定模式 (Setup Mode / 設定モード): (Rudder Left hold 3s to save)
 //    - 1.1 (1L 3S): 雙舵微調 (Servo Trim - 升降同向, 舵機高低差)
 // 5. 保存成功 (Saved / 保存成功): Blink pattern / 点滅確認
+// 
+// --- 搖桿特殊手勢 (Stick Gestures / スティックジェスチャー) ---
+// 1. 手動校準陀螺儀 (Manual Gyro Calibration - Disarmed 狀態下):
+//    - 左搖桿打至 左上 (Throttle up, Rudder left) -> rxThrottle > 1700 && rxRudder < 1200
+//    - 右搖桿打至 右上 (Aileron right, Elevator up) -> rxAileron > 1700 && rxElevator > 1700
+//    - 保持 1.5 秒，LED 快速閃爍代表開始校準，校準時請保持飛機水平靜止
+// 2. 進入設定模式 (Enter Setup Mode - Disarmed 狀態下):
+//    - 左搖桿打至 右下 (Throttle down, Rudder right) -> rxThrottle < 1200 && rxRudder > 1700
+//    - 右搖桿保持中立，保持 1.5 秒
+// 3. 設定模式下保存退出 (Save & Exit Setup Mode):
+//    - 左打方向舵 (Rudder left) 保持 3 秒，LED 長滅後長亮代表保存成功
+// 4. 設定模式下重置微調 (Reset Trims Shortcut):
+//    - 左搖桿打至 右下 (Throttle down, Rudder right)
+//    - 右搖桿打至 右上 (Aileron right, Elevator up) 保持 1.5 秒 -> rxAileron > 1700 && rxElevator > 1700
 
 #include <Arduino.h>         // 引用 Arduino 核心庫 (Arduino Core Library)
 #include <DSMRX.h>           // 引用 DSMX 接收機庫 (DSMX Receiver Library)
 #include <SoftwareSerial.h>  // 引用 軟串口庫 用於調試 (SoftwareSerial for Debugging)
 #include <EEPROM.h>          // 引用 EEPROM 庫 用於保存微調 (EEPROM for saving trims)
+#include <Wire.h>            // 引用 I2C 通訊庫 (Wire Library for I2C)
 
 // --- 硬體配置 (Hardware Configuration) ---
 const int PIN_SERVO_L = 9;   // 左舵機引腳 (Left Servo Pin - Timer 1 Hardware PWM)
@@ -43,11 +58,34 @@ const int WING_STOP_R = 900;     // 右舵機上揚停止位 (Right Wing Stop Po
 
 // --- 撲翼機動力限制 (Ornithopter Power Limits - PTK 7432 @ 8.4V) ---
 const float LIMIT_FREQ_MIN = 1.56;  // 最低拍動頻率 (Minimum Flapping Frequency Hz)
-const float LIMIT_FREQ_MAX = 4.5;   // 最高拍動頻率 (Maximum Flapping Frequency Hz)
+const float LIMIT_FREQ_MAX = 3.15;   // 最高拍動頻率 (Maximum Flapping Frequency Hz)
 const float US_PER_DEGREE = 11.11;  // 每度對應的微秒換算 (1000us/90deg conversion)
 const float AMP_MIN_US = 30.0 * US_PER_DEGREE; // 最低振幅 30度 (Min Amplitude 30deg)
 const float AMP_MID_US = 57.5 * US_PER_DEGREE; // 中間振幅 57.5度 (Mid Amplitude 57.5deg)
 const float AMP_MAX_US = 85.0 * US_PER_DEGREE; // 最高振幅 85度 (Max Amplitude 85deg)
+
+
+// --- GY-521 (MPU6050) 配置與自穩 PID 參數 (GY-521 IMU & Attitude PID Parameters) ---
+const int MPU_ADDR = 0x68;           // MPU6050 I2C 默認地址
+bool isImuActive = false;            // IMU 是否成功啟動
+
+// PID 自穩增益
+const float KP_PITCH = 0.6;          // 俯仰比例增益
+const float KD_PITCH = 0.15;         // 俯仰微分增益
+const float KP_ROLL  = 0.5;          // 滾轉比例增益
+const float KD_ROLL  = 0.12;         // 滾轉微分增益
+
+// 互補濾波與低通濾波參數
+const float FILTER_ALPHA = 0.98;     // 互補濾波權重 (Gyro 比例)
+const float LPF_BETA = 0.12;          // 數位低通濾波係數 (越小濾波越強，延遲越高)
+
+// 感測器偏差 (Offset) 與狀態變數
+float gyroOffsetX = 0, gyroOffsetY = 0, gyroOffsetZ = 0;
+float gyroX = 0, gyroY = 0, gyroZ = 0; // 最新角速度 (deg/s)
+float estPitch = 0, estRoll = 0;      // 估算出的姿態角 (deg)
+float filteredPitch = 0, filteredRoll = 0; // 經低通濾波後的自穩輸入角 (deg)
+bool htmlConnected = false;           // HTML 模擬器是否連線
+unsigned long lastHtmlKeepAlive = 0;  // 上次收到 HTML 心跳的時間
 
 // --- 全域對象 (Global Objects) ---
 DSM2048 rx; // DSMX 接收機對象 (DSMX Receiver Object)
@@ -82,6 +120,152 @@ volatile int rxRudder   = 1500;
 volatile int rxAmpCh    = 1500; 
 volatile int rxSafetyCh = 1000; 
 volatile int rxEmergencyCh = 1000; 
+
+// --- GY-521 MPU6050 讀取與處理程式 ---
+bool initMPU6050() {
+  Wire.begin();
+  Wire.setClock(400000); // 400kHz Fast Mode I2C
+  
+  // 喚醒 MPU6050 (寫入 0 至 PWR_MGMT_1 暫存器 0x6B)
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B);
+  Wire.write(0);
+  if (Wire.endTransmission() != 0) {
+    return false; // I2C 設備無回應
+  }
+  
+  // 設定 DLPF 數位低通濾波 (CONFIG 暫存器 0x1A)
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x1A);
+  Wire.write(0x03); // 約 42Hz 濾波頻寬，用於初步去除高頻機械雜訊
+  Wire.endTransmission();
+  
+  // 設定陀螺儀量程 +/- 2000 deg/s (GYRO_CONFIG 暫存器 0x1B)
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x1B);
+  Wire.write(0x18);
+  Wire.endTransmission();
+  
+  // 設定加速度計量程 +/- 8g (ACCEL_CONFIG 暫存器 0x1C)
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x1C);
+  Wire.write(0x10);
+  Wire.endTransmission();
+  
+  return true;
+}
+
+void calibrateMPU6050(bool waitBeforeCalib = false) {
+  if (waitBeforeCalib) {
+    // 1. 舵機先回到 center (中心偏置)
+    writePWM(PIN_SERVO_L, PWM_CENTER + savedOffsetL);
+    writePWM(PIN_SERVO_R, PWM_CENTER + savedOffsetR);
+
+    debug.println("Centering wings... Wait 2s.");
+    Serial.println("Centering wings... Wait 2s.");
+
+    // 2. 等待 2 秒，其間慢速閃爍 LED 提示準備中
+    for (int i = 0; i < 10; i++) {
+      digitalWrite(PIN_LED, LOW);
+      delay(100);
+      digitalWrite(PIN_LED, HIGH);
+      delay(100);
+    }
+  }
+
+  long sumX = 0, sumY = 0, sumZ = 0;
+  const int samples = 500;
+  
+  debug.println("Calibrating IMU... Keep flat and still.");
+  Serial.println("Calibrating IMU... Keep flat and still.");
+  
+  // 快速閃爍 LED 指示正在校準
+  for (int i = 0; i < samples; i++) {
+    if (i % 20 == 0) {
+      digitalWrite(PIN_LED, !digitalRead(PIN_LED));
+    }
+    
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x43); // 陀螺儀數據起始暫存器
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU_ADDR, 6, true);
+    
+    int16_t rx = (Wire.read() << 8) | Wire.read();
+    int16_t ry = (Wire.read() << 8) | Wire.read();
+    int16_t rz = (Wire.read() << 8) | Wire.read();
+    
+    sumX += rx;
+    sumY += ry;
+    sumZ += rz;
+    delay(3);
+  }
+  
+  gyroOffsetX = (float)sumX / samples;
+  gyroOffsetY = (float)sumY / samples;
+  gyroOffsetZ = (float)sumZ / samples;
+  
+  // 重置姿態角度與濾波，避免校準後姿態突跳
+  estPitch = 0;
+  estRoll = 0;
+  filteredPitch = 0;
+  filteredRoll = 0;
+  
+  debug.print("IMU Calibrated! Offsets: ");
+  debug.print(gyroOffsetX); debug.print(", ");
+  debug.print(gyroOffsetY); debug.print(", ");
+  debug.println(gyroOffsetZ);
+  
+  digitalWrite(PIN_LED, HIGH); // 還原 LED 狀態
+
+  // 校準完成後送出一筆 IMU 數據 (不受 htmlConnected 限制)
+  Serial.print("$IMU,");
+  Serial.print(estPitch, 1); Serial.print(",");
+  Serial.print(estRoll, 1); Serial.print(",");
+  Serial.print(filteredPitch, 1); Serial.print(",");
+  Serial.println(filteredRoll, 1);
+}
+
+void readMPU6050(float &accX, float &accY, float &accZ, float &gyroX, float &gyroY, float &gyroZ) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B); // 加速度計數據起始暫存器
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, 14, true);
+  
+  int16_t rawAccX = (Wire.read() << 8) | Wire.read();
+  int16_t rawAccY = (Wire.read() << 8) | Wire.read();
+  int16_t rawAccZ = (Wire.read() << 8) | Wire.read();
+  int16_t rawTemp = (Wire.read() << 8) | Wire.read(); // 溫度跳過
+  int16_t rawGyroX = (Wire.read() << 8) | Wire.read();
+  int16_t rawGyroY = (Wire.read() << 8) | Wire.read();
+  int16_t rawGyroZ = (Wire.read() << 8) | Wire.read();
+  
+  // 轉換為物理單位
+  accX = (float)rawAccX / 4096.0;
+  accY = (float)rawAccY / 4096.0;
+  accZ = (float)rawAccZ / 4096.0;
+  
+  // 陀螺儀減去零點偏置後轉換為 deg/s (16.4 LSB per deg/s)
+  gyroX = (float)(rawGyroX - gyroOffsetX) / 16.4;
+  gyroY = (float)(rawGyroY - gyroOffsetY) / 16.4;
+  gyroZ = (float)(rawGyroZ - gyroOffsetZ) / 16.4;
+}
+
+void updateAttitude(float dt) {
+  float accX, accY, accZ;
+  readMPU6050(accX, accY, accZ, gyroX, gyroY, gyroZ);
+  
+  // 計算加速度計傾角 (X 軸指向右翼，Y 軸指向機頭，Z 軸指向天空)
+  float accPitch = atan2(accY, sqrt(accX * accX + accZ * accZ)) * 57.29578; // 繞 X 軸為 Pitch
+  float accRoll  = atan2(-accX, accZ) * 57.29578;                           // 繞 Y 軸為 Roll
+  
+  // 互補濾波融合：陀螺儀積分類比姿態 + 加速度計修正姿態
+  estPitch = FILTER_ALPHA * (estPitch + gyroX * dt) + (1.0 - FILTER_ALPHA) * accPitch; // 繞 X 軸為 Pitch (角速度為 gyroX)
+  estRoll  = FILTER_ALPHA * (estRoll + gyroY * dt) + (1.0 - FILTER_ALPHA) * accRoll;   // 繞 Y 軸為 Roll (角速度為 gyroY)
+  
+  // 數位低通濾波器，專門用來壓制翅膀往復拍動產生的機械震動
+  filteredPitch = filteredPitch + LPF_BETA * (estPitch - filteredPitch);
+  filteredRoll = filteredRoll + LPF_BETA * (estRoll - filteredRoll);
+}
 
 // --- PWM 硬體定時器初始化 (Setup Hardware Timer for 333Hz PWM) ---
 void setupPWM333Hz() {
@@ -153,10 +337,48 @@ void setup() {
   digitalWrite(PIN_LED, HIGH); 
 
   delay(2000); 
+
+  // 初始化 IMU
+  isImuActive = initMPU6050();
+  if (isImuActive) {
+    calibrateMPU6050();
+  } else {
+    debug.println("GY-521 MPU6050 not detected! Falling back to 100% manual control.");
+    Serial.println("GY-521 MPU6050 not detected! Falling back to 100% manual control.");
+    // 快速閃爍 10 次表示 IMU 啟動失敗，將退回純手動混控
+    for (int i = 0; i < 10; i++) {
+      digitalWrite(PIN_LED, LOW); delay(100);
+      digitalWrite(PIN_LED, HIGH); delay(100);
+    }
+  }
+
   lastMicros = micros(); 
 }
 
 void loop() {
+  // Enforce 250Hz loop rate (4000us)
+  static unsigned long lastLoopMicros = 0;
+  while (micros() - lastLoopMicros < 4000) {
+    // wait
+  }
+  lastLoopMicros = micros();
+
+  // 讀取 USB 串口指令 (心跳與連線控制)
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'I') {
+      htmlConnected = true;
+      lastHtmlKeepAlive = millis();
+    } else if (c == 'O') {
+      htmlConnected = false;
+    }
+  }
+
+  // 心跳超時檢查 (2秒)
+  if (htmlConnected && (millis() - lastHtmlKeepAlive > 2000)) {
+    htmlConnected = false;
+  }
+
   if (rx.gotNewFrame()) {
     uint16_t ch[8]; 
     rx.getChannelValues(ch, 8); 
@@ -197,13 +419,56 @@ void loop() {
   lastMicros = currentMicros;
   if (dt < 0 || dt > 0.1) dt = 0; 
 
+  if (isImuActive) {
+    updateAttitude(dt);
+    
+    // --- USB Serial Real-time IMU output (every 50ms = 20Hz - Disabled) ---
+    /*
+    static unsigned long lastImuPrint = 0;
+    if (htmlConnected && (millis() - lastImuPrint > 50)) {
+      lastImuPrint = millis();
+      Serial.print("$IMU,");
+      Serial.print(estPitch, 1); Serial.print(",");
+      Serial.print(estRoll, 1); Serial.print(",");
+      Serial.print(filteredPitch, 1); Serial.print(",");
+      Serial.println(filteredRoll, 1);
+    }
+    */
+  }
+
   int ailInput = (rxAileron - PWM_CENTER);      
   int eleInput = (rxElevator - PWM_CENTER);   
   int mult = isGlobalReverse ? -1 : 1;
-  int commonPitch = (int)(eleInput * 0.44); 
-  int diffYaw = (int)(ailInput * 0.44); // Ch2 Aileron controls servo height difference (direction)
-  int centerL = PWM_CENTER + savedOffsetL + (-commonPitch + diffYaw) * mult; 
-  int centerR = PWM_CENTER + savedOffsetR + (commonPitch + diffYaw) * mult; 
+  
+  
+  int commonPitch;
+  int diffYaw;
+  if (isImuActive && isSystemArmed && rxThrottle > THROTTLE_ARM_PWM) {
+    // 自穩控制 (Angle Mode / Attitude Stabilization)
+    // 搖桿對應目標姿態角：升降搖桿對應 +/- 40 度 Pitch，副翼對應 +/- 40 度 Roll
+    float targetPitch = (float)eleInput * 0.08; 
+    float targetRoll  = (float)ailInput * 0.08;
+    
+    float errorPitch = targetPitch - filteredPitch;
+    float errorRoll  = targetRoll - filteredRoll;
+    
+    // 使用負角速度直接作為微分項 D，防止手動拉桿的突跳
+    float dTermPitch = -gyroX; // 繞 X 軸為 Pitch 率
+    float dTermRoll  = -gyroY; // 繞 Y 軸為 Roll 率
+    
+    float pidPitchOutput = (errorPitch * KP_PITCH) + (dTermPitch * KD_PITCH);
+    float pidRollOutput  = (errorRoll * KP_ROLL) + (dTermRoll * KD_ROLL);
+    
+    commonPitch = (int)constrain(pidPitchOutput, -250, 250);
+    diffYaw     = (int)constrain(pidRollOutput, -250, 250);
+  } else {
+    // 純手動混控 (Manual Mode Fallback)
+    commonPitch = (int)(eleInput * 0.44);
+    diffYaw     = (int)(ailInput * 0.528);
+  }
+  
+  int centerL = PWM_CENTER + savedOffsetL + (-commonPitch - diffYaw) * mult; // Subtract diffYaw to reverse direction
+  int centerR = PWM_CENTER + savedOffsetR + (commonPitch - diffYaw) * mult; // Subtract diffYaw to reverse direction 
 
   int outL = centerL; 
   int outR = centerR; 
@@ -211,8 +476,39 @@ void loop() {
   if (rxSafetyCh <= SAFETY_THRESHOLD) {
     isSystemArmed = false; 
     
-    if (rxThrottle < 1150 && rxRudder > 1800) {
-      if (!isInSetupMode) {
+    if (!isInSetupMode) {
+      // --- IMU 手動校準手勢 (Disarmed 狀態下，左搖桿左上，右搖桿右上，保持 1.5 秒) ---
+      static unsigned long imuCalibrateTimer = 0;
+      if (isImuActive && rxThrottle > 1700 && rxRudder < 1200 && rxAileron > 1700 && rxElevator > 1700) {
+        if (imuCalibrateTimer == 0) imuCalibrateTimer = millis();
+        if (millis() - imuCalibrateTimer > 1500) {
+          Serial.print("Gyro Reset Triggered! Sticks -> Thr: ");
+          Serial.print(rxThrottle);
+          Serial.print(" | Rud: ");
+          Serial.print(rxRudder);
+          Serial.print(" | Ail: ");
+          Serial.print(rxAileron);
+          Serial.print(" | Ele: ");
+          Serial.println(rxElevator);
+
+          debug.print("Gyro Reset Triggered! Sticks -> Thr: ");
+          debug.print(rxThrottle);
+          debug.print(" | Rud: ");
+          debug.print(rxRudder);
+          debug.print(" | Ail: ");
+          debug.print(rxAileron);
+          debug.print(" | Ele: ");
+          debug.println(rxElevator);
+
+          calibrateMPU6050(true);
+          imuCalibrateTimer = 0;
+        }
+      } else {
+        imuCalibrateTimer = 0;
+      }
+
+      // 進入設定模式
+      if (rxThrottle < 1200 && rxRudder > 1700) {
         isInSetupMode = true;
         setupStep = 0;
         rudderRightPushed = true; 
@@ -225,7 +521,7 @@ void loop() {
     if (isInSetupMode) {
       // --- Reset Offsets Shortcut (Left stick bottom-right, Right stick top-right for 1.5s) ---
       static unsigned long resetTimer = 0;
-      if (rxThrottle < 1150 && rxRudder > 1800 && rxAileron > 1800 && rxElevator > 1800) {
+      if (rxThrottle < 1200 && rxRudder > 1700 && rxAileron > 1700 && rxElevator > 1700) {
         if (resetTimer == 0) resetTimer = millis();
         if (millis() - resetTimer > 1500) {
           savedOffsetL = 0;

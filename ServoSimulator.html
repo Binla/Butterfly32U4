@@ -556,6 +556,15 @@
                 </div>
             </div>
 
+            <!-- Web Serial Connector -->
+            <div class="card" id="card-serial-connect">
+                <div class="card-title">🔌 實體飛控連線 (USB Web Serial)</div>
+                <div class="control-group">
+                    <button class="btn" id="btn-serial-connect" style="width: 100%; font-weight: 600; background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.25);">🔌 連接實體飛控 (Connect COM)</button>
+                    <div id="serial-status" style="font-size: 0.75rem; text-align: center; color: var(--text-muted);">尚未連線 (Disconnected)</div>
+                </div>
+            </div>
+
             <!-- Mechanical Linkage Settings -->
             <div class="card" id="card-linkage-settings" style="display: none;">
                 <div class="card-title">機構連桿幾何參數 (Mechanical Linkage)</div>
@@ -684,6 +693,17 @@
                     </div>
                 </div>
 
+                <div class="metric-grid" id="metric-grid-imu" style="display: none; grid-template-columns: 1fr 1fr; margin-bottom: 1.5rem; border: 1px solid var(--primary); border-radius: 10px; padding: 0.5rem; background: rgba(59, 130, 246, 0.05);">
+                    <div class="metric-box" style="border: none; background: transparent;">
+                        <span class="metric-title" style="color: var(--primary);">實體俯仰角 (Pitch)</span>
+                        <span class="metric-value" style="color: var(--primary);" id="metric-imu-pitch">0.0°</span>
+                    </div>
+                    <div class="metric-box" style="border: none; background: transparent;">
+                        <span class="metric-title" style="color: var(--primary);">實體滾轉角 (Roll)</span>
+                        <span class="metric-value" style="color: var(--primary);" id="metric-imu-roll">0.0°</span>
+                    </div>
+                </div>
+
                 <div class="metric-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 1.5rem;">
                     <div class="metric-box">
                         <span class="metric-title">當前拍動頻率</span>
@@ -745,10 +765,18 @@
         let mechanismType = 'direct'; // 'linkage' or 'direct'
         let lastTime = performance.now();
 
+        // Web Serial API variables
+        let serialPort = null;
+        let serialReader = null;
+        let serialInputBuffer = '';
+        let lastImuRoll = 0;
+        let lastImuPitch = 0;
+
         // PWM calculations constants from Butterfly.ino
         const PWM_CENTER = 1500;
         const LIMIT_FREQ_MIN = 1.56;
-        const LIMIT_FREQ_MAX = 4.5;
+        const LIMIT_FREQ_MAX = 3.15;
+        const THROTTLE_PITCH_MIX = 40;
         const US_PER_DEGREE = 11.11;
         const AMP_MIN_US = 30.0 * US_PER_DEGREE;
         const AMP_MAX_US = 85.0 * US_PER_DEGREE;
@@ -900,6 +928,15 @@
                 
                 updateSimulator();
             });
+
+            // Web Serial Connect Button Listener
+            document.getElementById('btn-serial-connect').addEventListener('click', function() {
+                if (serialPort) {
+                    disconnectSerial();
+                } else {
+                    connectSerial();
+                }
+            });
         }
 
         function updateValDisplay(key) {
@@ -935,11 +972,14 @@
             const rudInput = rxRudder - PWM_CENTER;
             const mult = isGlobalReverse ? -1 : 1;
             
-            const commonPitch = Math.round(eleInput * 0.44);
-            const diffYaw = Math.round(ailInput * 0.44); // Ch2 Aileron controls servo height difference (direction)
+            const tScale = Math.min(Math.max((rxThrottle - THROTTLE_ARM_PWM) / (2000 - THROTTLE_ARM_PWM), 0.0), 1.0);
+            const throttlePitchComp = Math.round(tScale * THROTTLE_PITCH_MIX);
+            const commonPitch = Math.round(eleInput * 0.44) + throttlePitchComp; // Add to move both servos down (pitch up)
             
-            const centerL = PWM_CENTER + savedOffsetL + (-commonPitch + diffYaw) * mult;
-            const centerR = PWM_CENTER + savedOffsetR + (commonPitch + diffYaw) * mult;
+            const diffYaw = Math.round(ailInput * 0.528); // Ch2 Aileron controls servo height difference (direction) - scaled up by 20%
+            
+            const centerL = PWM_CENTER + savedOffsetL + (-commonPitch - diffYaw) * mult; // Subtract diffYaw to reverse direction
+            const centerR = PWM_CENTER + savedOffsetR + (commonPitch - diffYaw) * mult; // Subtract diffYaw to reverse direction
 
             let outL = centerL;
             let outR = centerR;
@@ -1145,7 +1185,20 @@
 
             const scale = 2.4;
             const cx = canvas.width / 2;
-            const cy = canvas.height / 2 + 60;
+            let cy = canvas.height / 2 + 60;
+
+            if (serialPort && lastImuPitch !== undefined) {
+                // Shift the model's vertical center based on physical pitch to simulate climb/descent
+                cy -= lastImuPitch * 1.5;
+            }
+
+            ctx.save();
+            if (serialPort && lastImuRoll !== undefined) {
+                // Rotate drawing to visually represent the physical roll angle of the GY-521
+                ctx.translate(cx, cy);
+                ctx.rotate(lastImuRoll * Math.PI / 180);
+                ctx.translate(-cx, -cy);
+            }
 
             const transform = (p) => {
                 return {
@@ -1201,13 +1254,14 @@
             ctx.stroke();
 
             // Draw horizontal reference line through hinges (0 deg plane)
+            const defaultHingeY = (canvas.height / 2 + 60) - 35 * scale;
             ctx.save();
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
             ctx.lineWidth = 1;
             ctx.setLineDash([4, 4]);
             ctx.beginPath();
-            ctx.moveTo(0, fL.y);
-            ctx.lineTo(canvas.width, fL.y);
+            ctx.moveTo(0, defaultHingeY);
+            ctx.lineTo(canvas.width, defaultHingeY);
             ctx.stroke();
             
             // Add label
@@ -1215,9 +1269,9 @@
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 3;
             ctx.lineJoin = 'round';
-            ctx.strokeText('0° 水平參考線', 10, fL.y - 5);
+            ctx.strokeText('0° 水平參考線', 10, defaultHingeY - 5);
             ctx.fillStyle = '#ffffff';
-            ctx.fillText('0° 水平參考線', 10, fL.y - 5);
+            ctx.fillText('0° 水平參考線', 10, defaultHingeY - 5);
             ctx.restore();
 
             // Calculate dynamic peak limits (UP/DOWN envelope)
@@ -1451,6 +1505,58 @@
                 ctx.moveTo(H_t.x, H_t.y);
                 ctx.lineTo(wingTip_t.x, wingTip_t.y);
                 ctx.stroke();
+            }
+            ctx.restore();
+
+            // Draw a mini HUD Pitch Scale on the right side of the canvas
+            if (serialPort && lastImuPitch !== undefined) {
+                ctx.save();
+                const barX = canvas.width - 45;
+                const barY = 120;
+                const barH = 100;
+                
+                // Draw vertical line
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(barX, barY - barH/2);
+                ctx.lineTo(barX, barY + barH/2);
+                ctx.stroke();
+                
+                // Draw scale ticks and numbers every 15 degrees (-45 to +45)
+                ctx.font = '9px monospace';
+                ctx.fillStyle = '#9ca3af';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                ctx.lineWidth = 1;
+                for (let deg = -45; deg <= 45; deg += 15) {
+                    const tickY = barY - (deg * (barH / 90));
+                    ctx.beginPath();
+                    ctx.moveTo(barX, tickY);
+                    ctx.lineTo(barX + 4, tickY);
+                    ctx.stroke();
+                    ctx.fillText((deg > 0 ? '+' : '') + deg + '°', barX + 8, tickY);
+                }
+                
+                // Draw Pitch pointer triangle (colored light blue/primary)
+                const constrainedPitch = Math.min(Math.max(lastImuPitch, -45), 45);
+                const pitchIndicatorY = barY - (constrainedPitch * (barH / 90));
+                ctx.fillStyle = '#60a5fa'; // Light blue pointer
+                ctx.beginPath();
+                ctx.moveTo(barX - 2, pitchIndicatorY);
+                ctx.lineTo(barX - 8, pitchIndicatorY - 4);
+                ctx.lineTo(barX - 8, pitchIndicatorY + 4);
+                ctx.closePath();
+                ctx.fill();
+                
+                // Add text label above scale
+                ctx.font = 'bold 9px sans-serif';
+                ctx.fillStyle = '#60a5fa';
+                ctx.textAlign = 'center';
+                ctx.fillText('PITCH', barX + 12, barY - barH/2 - 12);
+                
+                ctx.restore();
             }
         }
 
@@ -1763,9 +1869,178 @@
 
                 const outputs = calculateServoPWMs(cyclePhase);
                 drawAnimation(outputs.outL, outputs.outR);
+            } else if (serialPort) {
+                // Keep drawing animation frame to tilt visual model when paused but serial is connected
+                const outputs = calculateServoPWMs(cyclePhase);
+                drawAnimation(outputs.outL, outputs.outR);
             }
 
             requestAnimationFrame(runLoop);
+        }
+
+        // Web Serial API functions
+        let keepAliveInterval = null;
+
+        async function connectSerial() {
+            try {
+                serialPort = await navigator.serial.requestPort();
+                await serialPort.open({ baudRate: 115200 });
+                document.getElementById('btn-serial-connect').textContent = '🔌 斷開連線 (Disconnect)';
+                document.getElementById('serial-status').textContent = '已連線 (Connected)';
+                document.getElementById('serial-status').style.color = 'var(--success)';
+                
+                // Start keep-alive sending "I" every 1000ms
+                keepAliveInterval = setInterval(async () => {
+                    if (serialPort && serialPort.writable) {
+                        try {
+                            const writer = serialPort.writable.getWriter();
+                            const encoder = new TextEncoder();
+                            await writer.write(encoder.encode("I"));
+                            writer.releaseLock();
+                        } catch (e) {
+                            console.error("Keepalive write failed:", e);
+                        }
+                    }
+                }, 1000);
+
+                readSerialLoop();
+            } catch (err) {
+                console.error(err);
+                document.getElementById('serial-status').textContent = '連線失敗: ' + err.message;
+                document.getElementById('serial-status').style.color = 'var(--danger)';
+            }
+        }
+
+        let isDisconnecting = false;
+
+        async function disconnectSerial() {
+            if (isDisconnecting) return;
+            isDisconnecting = true;
+            
+            if (keepAliveInterval) {
+                clearInterval(keepAliveInterval);
+                keepAliveInterval = null;
+            }
+
+            // Send stop command immediately
+            if (serialPort && serialPort.writable) {
+                try {
+                    const writer = serialPort.writable.getWriter();
+                    const encoder = new TextEncoder();
+                    await writer.write(encoder.encode("O"));
+                    writer.releaseLock();
+                } catch (e) {
+                    console.error("Stop command write failed:", e);
+                }
+            }
+
+            if (serialReader) {
+                try {
+                    await serialReader.cancel();
+                } catch (e) {
+                    console.error('Error canceling reader:', e);
+                }
+            } else {
+                if (serialPort) {
+                    try {
+                        await serialPort.close();
+                    } catch (e) {
+                        console.error('Error closing port:', e);
+                    }
+                    serialPort = null;
+                }
+                isDisconnecting = false;
+                // Reset UI
+                const imuGrid = document.getElementById('metric-grid-imu');
+                if (imuGrid) imuGrid.style.display = 'none';
+                document.getElementById('btn-serial-connect').textContent = '🔌 連接實體飛控 (Connect COM)';
+                document.getElementById('serial-status').textContent = '連線已中斷 (Disconnected)';
+                document.getElementById('serial-status').style.color = 'var(--text-muted)';
+            }
+        }
+
+        async function readSerialLoop() {
+            while (serialPort && serialPort.readable && !isDisconnecting) {
+                try {
+                    const reader = serialPort.readable.getReader();
+                    serialReader = reader;
+                    const decoder = new TextDecoder();
+                    while (!isDisconnecting) {
+                        const { value, done } = await reader.read();
+                        if (done || isDisconnecting) {
+                            break;
+                        }
+                        if (value) {
+                            serialInputBuffer += decoder.decode(value);
+                            let lines = serialInputBuffer.split('\n');
+                            serialInputBuffer = lines.pop(); // Keep incomplete line
+                            
+                            for (let line of lines) {
+                                line = line.trim();
+                                if (line.startsWith('$IMU,')) {
+                                    const parts = line.substring(5).split(',');
+                                    if (parts.length >= 4) {
+                                        const estPitchVal = parseFloat(parts[0]);
+                                        const estRollVal = parseFloat(parts[1]);
+                                        const filtPitchVal = parseFloat(parts[2]);
+                                        const filtRollVal = parseFloat(parts[3]);
+                                        
+                                        updateFromHardwareIMU(estPitchVal, estRollVal, filtPitchVal, filtRollVal);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error('Serial read error:', err);
+                    break;
+                } finally {
+                    if (serialReader) {
+                        serialReader.releaseLock();
+                        serialReader = null;
+                    }
+                }
+            }
+
+            // Lock has been released, safe to close port
+            if (serialPort) {
+                try {
+                    await serialPort.close();
+                } catch (e) {
+                    console.error('Error closing port:', e);
+                }
+                serialPort = null;
+            }
+
+            if (keepAliveInterval) {
+                clearInterval(keepAliveInterval);
+                keepAliveInterval = null;
+            }
+
+            // Reset UI and state
+            const imuGrid = document.getElementById('metric-grid-imu');
+            if (imuGrid) imuGrid.style.display = 'none';
+            
+            document.getElementById('btn-serial-connect').textContent = '🔌 連接實體飛控 (Connect COM)';
+            document.getElementById('serial-status').textContent = '連線已中斷 (Disconnected)';
+            document.getElementById('serial-status').style.color = 'var(--text-muted)';
+            
+            lastImuRoll = 0;
+            lastImuPitch = 0;
+            isDisconnecting = false;
+        }
+
+        function updateFromHardwareIMU(estPitchVal, estRollVal, filtPitchVal, filtRollVal) {
+            lastImuRoll = filtRollVal;
+            lastImuPitch = filtPitchVal;
+            
+            const imuGrid = document.getElementById('metric-grid-imu');
+            if (imuGrid) imuGrid.style.display = 'grid';
+            
+            const pEl = document.getElementById('metric-imu-pitch');
+            const rEl = document.getElementById('metric-imu-roll');
+            if (pEl) pEl.textContent = filtPitchVal.toFixed(1) + '°';
+            if (rEl) rEl.textContent = filtRollVal.toFixed(1) + '°';
         }
 
         // Main initialisation
