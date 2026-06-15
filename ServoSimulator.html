@@ -657,7 +657,7 @@
 
             <!-- Diagnostics and Analysis -->
             <div class="card analysis-card">
-                <div class="card-title">行程對稱性診斷與數據分析 (Diagnostics & Diagnostics)</div>
+                <div class="card-title">行程對稱性診斷與數據分析 (Diagnostics & Analysis)</div>
                 
                 <div class="metric-grid">
                     <!-- Left Servo Metrics -->
@@ -719,9 +719,6 @@
                     </div>
                 </div>
 
-                <div class="alert-box alert-warning" id="warning-speed-limit" style="display:none;">
-                    ⚠️ <b>警告：超出舵機速度極限！</b> 當前設定需要最高 <span id="warn-speed-val">0</span>°/s 的舵速，已超過該舵機在 7.4V 下的無載極限速度 (800°/s)。這會導致舵機嚴重發熱、訊號滯後、波形失真甚至燒毀。請降低油門(頻率)或減小振幅。
-                </div>
                 <div class="alert-box alert-info" id="warning-speed-high" style="display:none;">
                     💡 <b>提示：舵機負載較高。</b> 當前設定的最高舵速為 <span id="info-speed-val">0</span>°/s，處於無載極限速度的 65% ~ 100% 之間。在實際飛行中，由於空氣阻力與翅膀慣性，舵機可能會明顯發熱，請注意散熱與飛行時間。
                 </div>
@@ -731,26 +728,6 @@
 
                 <div class="alert-box alert-warning" id="warning-binding" style="display:none;">
                     ⚠️ <b>警告：連桿機構發生卡死或超出物理極限！</b> 目前設定的連桿幾何無法支持此舵機角度，請調整「機構連桿參數」或減小「振幅通道」。
-                </div>
-
-                <div class="analysis-text">
-                    <p><b>🔍 診斷分析：為什麼你會覺得「上半部行程太小」？</b></p>
-                    <p>在當前的模擬中，我們可以觀察到兩個可能導致上半部行程偏小的重要因素：</p>
-                    <ul>
-                        <li><b>1. 連桿幾何的非線性傳動 (Over-center Effect)</b>：
-                            當舵機 PWM 大於 1500 (左翼向上) 或小於 1500 (右翼向上) 時，舵機臂開始朝向上方旋轉。如果舵機旋轉角度過大 (例如接近 ±90°，即 PWM 2500 / 500)，舵機臂會轉至接近垂直位置。此時<b>「舵機每旋轉一度，推桿產生的垂直位移會急劇減小」</b>。這在物理上表現為翅膀在上死點附近幾乎停滯，導致「上半部拍動行程看起來極小，而下半部行程較大」的現象。
-                        </li>
-                        <li><b>2. 舵機臂初始安裝偏置 (Spline Offset)</b>：
-                            如果在裝配時，舵機中立點 (PWM 1500) 對應的舵機臂不是水平的，而是向下傾斜，那麼當舵機向上轉動時，它會很早進入正弦波效率低下的死點，而向下轉動時則有充足的行程。這會產生嚴重的上下行程不對稱。
-                        </li>
-                        <li><b>3. 軟體中立點偏移量過大 (EEPROM Trim)</b>：
-                            如果在設定模式中調整了過大的中立點偏置量 (Offset)，會導致左右翼正弦振盪的基準點移向一側，進而造成單側的極限位置被軟體限幅 (500us 或 2500us) 裁剪，或者在機構上提早進入死點。
-                        </li>
-                    </ul>
-                    <p><b>🛠️ 建議解決方案：</b></p>
-                    <p>1. <b>機械修正 (最推薦)</b>：確保在 PWM 1500 (中立點) 時，舵機臂<b>必須嚴格水平</b>。如果使用此模擬器，可以調整<b>「舵機臂安裝角度偏差」</b>滑桿，你會發現當偏差為正值或負值時，上下拍動的角度差會急劇惡化或改善。</p>
-                    <p>2. <b>縮小擺幅</b>：如果翅膀上揚行程卡死，可以調小 Ch6 振幅通道的值（例如將 90° 縮小為 75° 或 60°），使舵機工作在線性度較高的角度範圍內（±45°至±60°），避免進入大角度的非線性區。</p>
-                    <p>3. <b>軟體非線性補償</b>：如果由於結構限制無法更改機械，我們可以在代碼中加入<b>「非線性拉伸因子」</b>或<b>「非對稱擺幅增益」</b>。例如，在上半週正弦波時，將 amplitude 乘以一個放大係數 1.15，在下半週時乘以 0.85，以抵消機構帶來的非線性衰減。</p>
                 </div>
             </div>
 
@@ -1726,7 +1703,8 @@
                 document.getElementById('protect-orig-amp').textContent = originalAmpDeg.toFixed(1);
                 document.getElementById('protect-lim-amp').textContent = currentAmpDeg.toFixed(1);
                 
-                document.getElementById('warning-speed-limit').style.display = 'none';
+                const wsl = document.getElementById('warning-speed-limit');
+                if (wsl) wsl.style.display = 'none';
                 document.getElementById('warning-speed-high').style.display = 'none';
             } else {
                 speedValueEl.textContent = `${Math.round(actualReqSpeed)}°/s`;
@@ -1735,17 +1713,21 @@
                 
                 if (actualSpeedRatio > 100) {
                     ratioEl.style.color = 'var(--danger)';
-                    document.getElementById('warning-speed-limit').style.display = 'block';
+                    const wsl = document.getElementById('warning-speed-limit');
+                    if (wsl) wsl.style.display = 'block';
                     document.getElementById('warning-speed-high').style.display = 'none';
-                    document.getElementById('warn-speed-val').textContent = Math.round(actualReqSpeed);
+                    const wsv = document.getElementById('warn-speed-val');
+                    if (wsv) wsv.textContent = Math.round(actualReqSpeed);
                 } else if (actualSpeedRatio > 65) {
                     ratioEl.style.color = 'var(--warning)';
-                    document.getElementById('warning-speed-limit').style.display = 'none';
+                    const wsl = document.getElementById('warning-speed-limit');
+                    if (wsl) wsl.style.display = 'none';
                     document.getElementById('warning-speed-high').style.display = 'block';
                     document.getElementById('info-speed-val').textContent = Math.round(actualReqSpeed);
                 } else {
                     ratioEl.style.color = 'var(--success)';
-                    document.getElementById('warning-speed-limit').style.display = 'none';
+                    const wsl = document.getElementById('warning-speed-limit');
+                    if (wsl) wsl.style.display = 'none';
                     document.getElementById('warning-speed-high').style.display = 'none';
                 }
             }
